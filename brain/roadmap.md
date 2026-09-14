@@ -2,16 +2,16 @@
 slug: roadmap
 title: Roadmap
 role: milestones
-updated: "2026-09-14T18:41:08"
+updated: "2026-09-14T19:40:27"
 ---
 
 # Roadmap
 
-> Provisional — from PLAN.md §11.
+> From PLAN.md §11. M0 shipped: `fd620a0` — island terrain, instanced vegetation, 2.5D camera, player rig, day/night; `node smoke/run.mjs` → `SMOKE_OK`.
 
 | Phase | Scope | Gate |
 |---|---|---|
-| M0 | Three.js scaffold: island terrain, palms/trees, 2.5D camera, day/night | Walkable beach, sun sets |
+| M0 ✅ | Three.js scaffold: island terrain, palms/trees, 2.5D camera, day/night | Walkable beach, sun sets |
 | M1 | Survival: stats, water, fire, coconut, spear + fish, first crab | 10-min playable fragment |
 | M2 | Camp: fence, light, sleep + first night with one tiger + crabs + gulls | First scary night (fun-check) |
 | M3 | Vegetation (edible/poison/medicinal/growth) + weather (rain/storm) | Foraging is a game |
