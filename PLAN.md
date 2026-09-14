@@ -122,15 +122,37 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | Phase | Scope | Gate |
 |---|---|---|
 | **M0** ✅ | Three.js scaffold: island terrain, palms/trees, 2.5D camera, day/night | Walkable beach, sun sets |
-| **M1** ✅ | Survival: stats, water, fire, coconut, spear + **fish**, first crab | 10-min playable fragment |
-| **M2** | Camp: build spot, fence, light, sleep + **one tiger + crabs + gulls** night 1 | First scary night (fun-check: if not tense, stop & fix) |
-| **M3** | Vegetation system (edible/poison/medicinal/growth) + weather (rain/storm) | Foraging is a game, not a checklist |
-| **M4** | All 10 animals + alarm bus + paper map + journal | The island is alive |
-| **M5** | Raft + win + endless mode (adaptation, escalating pressure) | Shippable v0.1 |
-| **M6** | Polish: audio pass, perf (instancing/LOD), save/respawn | v1 |
-| **M7** | **Multiplayer:** `VibeSurvivorsPlugin` in `../ServerBase`, `?mp=host:port`, presence + shared world + animals relay | 3 tabs converge on the same island |
-
-M7 is "later" by design — nothing before it depends on the server except the deterministic seed.
+| **M1** ✅ | Survival basics: stats, water, fire, coconut, spear, fish, first crab | 10-min playable fragment |
+| **M2** | Camp build spot + simple building placement | Player can choose a camp location and place basic camp structures |
+| **M3** | Fence + camp light/fire integration | Functional fenced and lit camp |
+| **M4** | Sleep system + night survival loop | Player can sleep safely under valid camp conditions |
+| **M5** | First tiger: spawn, movement, stalking/chasing, retreat from fire | Tiger creates a functional threat loop |
+| **M6** | Night-1 encounter: tiger + crabs + gulls + balancing | First scary night; if not tense/fun, stop and fix before continuing |
+| **M7** | Vegetation framework: deterministic spawning, plant data, growth/state system | Plants exist as a reusable gameplay system |
+| **M8** | Edible + poisonous plants and vegetables | Foraging requires identification and risk/reward choices |
+| **M9** | Medicinal plants + harvesting/regrowth | Plant resources support survival decisions over time |
+| **M10** | Weather framework: clear/cloudy/rain | Weather transitions visibly and affects the island |
+| **M11** | Storm gameplay + weather/survival interaction | Storm materially changes survival decisions |
+| **M12** | Remaining animal framework + shared animal state/behaviour foundations | New animal species can be added without bespoke world logic |
+| **M13** | Monkeys + large lizards + snakes | Land wildlife has distinct behaviours |
+| **M14** | Seagulls + pelicans + expanded crabs | Beach/air ecosystem feels active |
+| **M15** | Sharks + expanded fish ecosystem | Water ecosystem creates risk and opportunity |
+| **M16** | Animal alarm bus + cross-species reactions | Animals react meaningfully to nearby threats/events |
+| **M17** | Animal ecosystem integration + balancing | All 10 species coexist without obvious broken behaviour |
+| **M18** | Paper map system | Player can navigate using an in-world paper map |
+| **M19** | Journal + discoveries | Plants, animals and discoveries are recorded through gameplay |
+| **M20** | Raft construction system | Player can gather/build all required raft components |
+| **M21** | Escape/win sequence | Completed raft provides a working game ending |
+| **M22** | Endless mode + adaptation/escalating pressure | Game can continue meaningfully after normal progression |
+| **M23** | Audio pass | Island, weather, animals and survival actions have coherent audio feedback |
+| **M24** | Performance pass: instancing, LOD, profiling | Stable target performance with full island systems active |
+| **M25** | Save/load + respawn/recovery | Progress survives reload and failure states recover correctly |
+| **M26** | Single-player v1 integration/polish | Complete single-player game passes end-to-end playthrough |
+| **M27** | ServerBase `VibeSurvivorsPlugin` scaffold + protocol | Plugin builds and client can connect with `?mp=host:port` |
+| **M28** | Multiplayer player presence + movement | 3 tabs see the same connected players |
+| **M29** | Shared deterministic world state | 3 tabs converge on the same island/world state |
+| **M30** | Multiplayer animals + gameplay event relay | Animal/gameplay events converge across clients |
+| **M31** | Multiplayer integration + reconnect/testing | 3 tabs survive normal play/reconnect without world divergence |
 
 ## 12. Dev conventions
 
