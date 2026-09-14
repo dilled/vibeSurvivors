@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "tokenix": {
+      "command": "tokenix",
+      "args": [
+        "mcp",
+        "--profile",
+        "slim",
+        "--only-cpu",
+        "--no-tui"
+      ]
+    }
+  }
+}
