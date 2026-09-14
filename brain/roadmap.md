@@ -2,19 +2,22 @@
 slug: roadmap
 title: Roadmap
 role: milestones
-updated: "2026-06-22T00:00:00"
+updated: "2026-09-14T18:41:08"
 ---
 
-## Milestones
+# Roadmap
 
-<!-- List stage goals, one slice every 2–4 weeks. -->
+> Provisional — from PLAN.md §11.
 
-```mermaid
-gantt
-  title Roadmap
-  dateFormat YYYY-MM-DD
-  section Stage one
-  Placeholder task :a1, 2026-06-22, 14d
-  section Stage two
-  Placeholder task :after a1, 14d
-```
+| Phase | Scope | Gate |
+|---|---|---|
+| M0 | Three.js scaffold: island terrain, palms/trees, 2.5D camera, day/night | Walkable beach, sun sets |
+| M1 | Survival: stats, water, fire, coconut, spear + fish, first crab | 10-min playable fragment |
+| M2 | Camp: fence, light, sleep + first night with one tiger + crabs + gulls | First scary night (fun-check) |
+| M3 | Vegetation (edible/poison/medicinal/growth) + weather (rain/storm) | Foraging is a game |
+| M4 | All 10 animals + alarm bus + paper map + journal | The island is alive |
+| M5 | Raft + win + endless mode | Shippable v0.1 |
+| M6 | Polish: audio pass, perf, save/respawn | v1 |
+| M7 | Multiplayer via `../ServerBase` (`VibeSurvivorsPlugin`) | 3 tabs converge on one island |
+
+M7 is "later" by design: the only v1 design obligation it imposes is the deterministic world seed.
