@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>vibeSurvivors — shipwreck on an unmapped island</title>
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #06121c; font-family: 'Segoe UI', system-ui, sans-serif; }
+  #overlay {
+    position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: radial-gradient(ellipse at 50% 38%, rgba(10,30,44,.55), rgba(4,10,16,.88));
+    backdrop-filter: blur(2px); color: #e8eef6; transition: opacity .8s; pointer-events: none;
+  }
+  #overlay h1 {
+    margin: 0; font-size: 72px; font-weight: 900; letter-spacing: 10px;
+    background: linear-gradient(180deg, #fff 20%, #9fd4ff 55%, #2e7fa8 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 3px 14px rgba(60,140,200,.35));
+  }
+  #overlay .sub { margin: 8px 0 26px; font-size: 15px; letter-spacing: 4px; color: #9fc3dd; text-transform: uppercase; }
+  #overlay .card {
+    background: rgba(8,18,28,.6); border: 1px solid rgba(120,180,230,.22);
+    border-radius: 10px; padding: 18px 30px; max-width: 520px;
+  }
+  #overlay .row { display: flex; justify-content: space-between; gap: 18px; font-size: 13.5px; margin: 5px 0; color: #b9c8de; }
+  #overlay .row b { color: #fff; font-weight: 600; }
+  #overlay .play {
+    margin-top: 22px; font-size: 15px; font-weight: 700; letter-spacing: 4px;
+    color: #fff; text-shadow: 0 0 18px rgba(120,190,255,.8); animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 50% { opacity: .55; } }
+  #hud {
+    position: fixed; top: 14px; left: 14px; z-index: 12; pointer-events: none;
+    font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 12.5px; line-height: 1.55;
+    color: #d7ecff; text-shadow: 0 1px 3px rgba(0,0,0,.8); white-space: pre;
+    background: rgba(6,14,22,.4); border: 1px solid rgba(120,180,230,.16);
+    border-radius: 8px; padding: 8px 12px;
+  }
+  #hint {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 12;
+    font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 12.5px;
+    color: #ffe9a0; text-shadow: 0 1px 3px rgba(0,0,0,.9);
+    background: rgba(6,14,22,.45); border: 1px solid rgba(120,180,230,.18);
+    border-radius: 8px; padding: 6px 14px; pointer-events: none; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="overlay">
+  <h1>vibeSURVIVORS</h1>
+  <div class="sub">shipwreck &middot; an unmapped island</div>
+  <div class="card">
+    <div class="row"><span>move</span><b>W A S D</b></div>
+    <div class="row"><span>sprint</span><b>Shift</b></div>
+    <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
+    <div class="row"><span>respawn</span><b>R</b></div>
+  </div>
+  <div class="play">ANY KEY &mdash; WASH ASHORE</div>
+</div>
+<div id="hud"></div>
+<div id="hint">the island is unmapped &mdash; what you see is all there is</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* =====================================================================
+ * vibeSurvivors — M0: island terrain, palms/trees/rocks, 2.5D camera,
+ * day-night cycle. Everything world-related is deterministic from SEED
+ * (required by the future ServerBase world-sync — see PLAN.md §9).
+ * ===================================================================== */
+
+/* ---------------- seeded world ---------------- */
+
+const SEED = 1337;
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(SEED);
+
+/* integer hash -> [0,1), fixed for the life of the island */
+function hash2(ix, iz) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iz, 668265263) + Math.imul(SEED, 974634) | 0;
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  n ^= n >>> 16;
+  return (n >>> 0) / 4294967296;
+}
+function vnoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = hash2(ix, iz), b = hash2(ix + 1, iz), c = hash2(ix, iz + 1), d = hash2(ix + 1, iz + 1);
+  return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+}
+function fbm(x, z, oct) {
+  let v = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) { v += amp * vnoise(x * f, z * f); amp *= 0.5; f *= 2.03; }
+  return v; /* ~0..1 */
+}
+
+const ISLAND_R = 210;
+const WATER = 0;
+
+/* height in world units; island falls to seabed past ISLAND_R.
+   This is the single source of truth shared by terrain, trees,
+   player and (later) the mp server. */
+function heightAt(x, z) {
+  const r = Math.hypot(x, z) / ISLAND_R;
+  if (r > 1.2) return -8;
+  const fall = Math.max(0, 1 - r * r); // sloped shore (no flat beach slab)
+  const shore = 0.75 + 0.5 * fbm(x * 0.02, z * 0.02, 3); // ragged coastline
+  const n = fbm(x * 0.012, z * 0.012, 5);                // island shape
+  const n2 = fbm(x * 0.05 + 7.31, z * 0.05 - 2.17, 3);  // slope chatter
+  let h = 26 * fall * shore * (0.35 + 0.65 * n) + (n2 - 0.5) * 3 * fall;
+  // seabed continues down past the shoreline
+  const deep = Math.min(1, Math.max(0, (r - 1) / 0.2));
+  return h * (1 - deep) + -8 * deep;
+}
+function zoneAt(h) {
+  if (h < 1.2) return 'beach';
+  if (h < 7) return 'grass';
+  if (h < 16) return 'jungle';
+  return 'high';
+}
+
+/* ---------------- renderer / scene ---------------- */
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+renderer.domElement.style.display = 'block';
+
+const scene = new THREE.Scene();
+const skyColor = new THREE.Color(0x86b8dd);
+scene.background = skyColor;
+scene.fog = new THREE.Fog(0x86b8dd, 100, 520);
+scene.fog.color = skyColor;
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 900);
+
+const hemi = new THREE.HemisphereLight(0xbfd8ef, 0x45603a, 0.8);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2d8, 1.1);
+scene.add(sun);
+const moon = new THREE.DirectionalLight(0x7fa0ff, 0);
+scene.add(moon);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ---------------- terrain ---------------- */
+
+const SIZE = 440, SEG = 176;
+{
+  const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const C = {
+    seabed: [0.09, 0.34, 0.41],
+    beach:  [0.87, 0.78, 0.55],
+    grass:  [0.40, 0.60, 0.27],
+    jungle: [0.26, 0.45, 0.22],
+    high:   [0.55, 0.52, 0.46],
+  };
+  const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const band = (h, a, b) => Math.min(1, Math.max(0, (h - a) / (b - a)));
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = heightAt(x, z);
+    pos.setY(i, h);
+    let col = h < 0.35 ? C.seabed : C.beach;
+    col = lerp3(col, C.beach, band(h, -1.5, 0.35));        // seabed -> beach
+    col = lerp3(col, C.grass, band(h, 1.2, 2.4));          // beach -> grass
+    col = lerp3(col, C.jungle, band(h, 7, 10));            // grass -> jungle
+    col = lerp3(col, C.high, band(h, 16, 20));             // jungle -> rock
+    const dither = 0.94 + 0.12 * vnoise(x * 0.35, z * 0.35);
+    colors[i * 3] = col[0] * dither;
+    colors[i * 3 + 1] = col[1] * dither;
+    colors[i * 3 + 2] = col[2] * dither;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  scene.add(terrain);
+}
+
+/* water */
+const water = new THREE.Mesh(
+  new THREE.PlaneGeometry(1400, 1400),
+  new THREE.MeshLambertMaterial({ color: 0x2a6a8f, transparent: true, opacity: 0.82 })
+);
+water.rotation.x = -Math.PI / 2;
+water.position.y = WATER + 0.02;
+scene.add(water);
+
+/* ---------------- scatter helper ---------------- */
+
+function scatter(n, hmin, hmax, minDist, maxAttempts = 4000) {
+  const pts = [];
+  let attempts = 0;
+  while (pts.length < n && attempts < maxAttempts) {
+    attempts++;
+    const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 0.96;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const h = heightAt(x, z);
+    if (h < hmin || h > hmax) continue;
+    let ok = true;
+    for (const p of pts) if (Math.hypot(p.x - x, p.z - z) < minDist) { ok = false; break; }
+    if (ok) pts.push({ x, z, h });
+  }
+  return pts;
+}
+
+/* ---------------- vegetation ---------------- */
+
+const palms = [];   /* {x,z,h, tx,tz, top} */
+const bigTrees = []; /* {x,z,h} */
+const rocks = [];
+
+const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler();
+const V = new THREE.Vector3(), S = new THREE.Vector3();
+
+/* palms: beach + grass fringe */
+for (const p of scatter(140, 0.5, 6, 6)) {
+  const h = 3.5 + rng() * 2.2;
+  const tx = (rng() - 0.5) * 0.5, tz = (rng() - 0.5) * 0.5;
+  palms.push({ ...p, h, tx, tz, top: [p.x + tx * h * 0.98, p.h + h, p.z + tz * h * 0.98] });
+}
+/* big trees with lianas: jungle */
+for (const p of scatter(120, 7, 22, 8)) bigTrees.push({ ...p, th: 6 + rng() * 4 }); /* h=ground, th=trunk height */
+/* rocks: high ground + a few on the beach */
+for (const p of scatter(90, 12, 40, 5)) rocks.push(p);
+for (const p of scatter(25, 0.4, 2.2, 5)) rocks.push(p);
+
+function addInstanced(geo, mat, count) {
+  const m = new THREE.InstancedMesh(geo, mat, count);
+  m.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  scene.add(m);
+  return m;
+}
+function setM(i, mesh, px, py, pz, rx, ry, rz, sx, sy, sz) {
+  E.set(rx, ry, rz);
+  Q.setFromEuler(E);
+  V.set(px, py, pz);
+  S.set(sx, sy, sz);
+  M4.compose(V, Q, S);
+  mesh.setMatrixAt(i, M4);
+}
+
+{
+  /* palm trunks */
+  const trunkGeo = new THREE.CylinderGeometry(0.14, 0.3, 1, 5);
+  trunkGeo.translate(0, 0.5, 0);
+  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8a6f4d });
+  const trunks = addInstanced(trunkGeo, trunkMat, palms.length);
+  for (let i = 0; i < palms.length; i++) {
+    const p = palms[i];
+    setM(i, trunks, p.x, p.h, p.z, p.tz, 0, -p.tx, 1, p.h, 1);
+  }
+  /* palm fronds: 7 per crown */
+  const frondGeo = new THREE.ConeGeometry(0.5, 2.3, 4);
+  frondGeo.rotateZ(-Math.PI / 2);
+  frondGeo.scale(1, 0.22, 1);
+  frondGeo.translate(1.15, 0, 0);
+  const frondMat = new THREE.MeshLambertMaterial({ color: 0x3f8f4f, side: THREE.DoubleSide });
+  const perPalm = 7;
+  const fronds = addInstanced(frondGeo, frondMat, palms.length * perPalm);
+  let fi = 0;
+  for (const p of palms) {
+    for (let k = 0; k < perPalm; k++) {
+      const a = (k / perPalm) * Math.PI * 2 + p.x * 0.37;
+      setM(fi++, fronds,
+        p.top[0] + Math.cos(a) * 1.0, p.top[1] - 0.1, p.top[2] + Math.sin(a) * 1.0,
+        0.42, -a, 0, 1, 1, 1);
+    }
+  }
+  /* coconuts: 2 per crown */
+  const cocoGeo = new THREE.IcosahedronGeometry(0.13, 0);
+  const cocoMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2e });
+  const cocos = addInstanced(cocoGeo, cocoMat, palms.length * 2);
+  for (let i = 0; i < palms.length; i++) {
+    const p = palms[i];
+    setM(i * 2, cocos, p.top[0] + 0.18, p.top[1] - 0.18, p.top[2] + 0.1, 0, 0, 0, 1, 1, 1);
+    setM(i * 2 + 1, cocos, p.top[0] - 0.15, p.top[1] - 0.18, p.top[2] - 0.14, 0, 0, 0, 1, 1, 1);
+  }
+  /* big tree trunks */
+  const btGeo = new THREE.CylinderGeometry(0.45, 0.8, 1, 6);
+  btGeo.translate(0, 0.5, 0);
+  const btMat = new THREE.MeshLambertMaterial({ color: 0x6e4f33 });
+  const btTrunks = addInstanced(btGeo, btMat, bigTrees.length);
+  for (let i = 0; i < bigTrees.length; i++) {
+    const t = bigTrees[i];
+    setM(i, btTrunks, t.x, t.h - 0.2, t.z, 0, 0, 0, 1, t.th, 1);
+  }
+  /* canopies: 3 blobs per tree */
+  const canGeo = new THREE.IcosahedronGeometry(1, 0);
+  canGeo.scale(1, 0.75, 1);
+  const canMat = new THREE.MeshLambertMaterial({ color: 0x2f6b35 });
+  const cans = addInstanced(canGeo, canMat, bigTrees.length * 3);
+  let ci = 0;
+  for (const t of bigTrees) {
+    const s = 2.6 + rng() * 1.2, top = t.h + t.th;
+    setM(ci++, cans, t.x, top - 0.6, t.z, 0, t.x * 0.7, 0, s, s * 0.8, s);
+    setM(ci++, cans, t.x + s * 0.5, top - 1.8, t.z + s * 0.3, 0, 0, 0, s * 0.8, s * 0.7, s * 0.8);
+    setM(ci++, cans, t.x - s * 0.45, top - 1.5, t.z - s * 0.35, 0, 0, 0, s * 0.75, s * 0.65, s * 0.75);
+  }
+  /* lianas: 3 hanging strands per big tree */
+  const lianaGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 4);
+  lianaGeo.translate(0, 0.5, 0);
+  const lianaMat = new THREE.MeshLambertMaterial({ color: 0x4c7a3a });
+  const lianas = addInstanced(lianaGeo, lianaMat, bigTrees.length * 3);
+  let li = 0;
+  for (const t of bigTrees) {
+    for (let k = 0; k < 3; k++) {
+      const off = 0.5 + rng() * 0.5;
+      const len = 2 + rng() * 3.5;
+      const ax = Math.cos(k * 2.1 + t.z) * off, az = Math.sin(k * 2.1 + t.x) * off;
+      setM(li++, lianas, t.x + ax, t.h + t.th - len, t.z + az, 0, 0, 0, 1, len, 1);
+    }
+  }
+  /* rocks */
+  const rockGeo = new THREE.IcosahedronGeometry(1, 0);
+  rockGeo.scale(1, 0.7, 1);
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x8a8477 });
+  const rockMesh = addInstanced(rockGeo, rockMat, rocks.length);
+  for (let i = 0; i < rocks.length; i++) {
+    const r = rocks[i];
+    const s = 0.4 + rng() * 1.2;
+    setM(i, rockMesh, r.x, r.h - 0.1, r.z, 0, r.x * 1.3, 0, s, s * (0.7 + rng() * 0.5), s);
+  }
+}
+
+/* ---------------- player (simple humanoid rig) ---------------- */
+
+const spawn = (() => {
+  const a = 0.8;
+  let x = Math.cos(a) * ISLAND_R * 0.98, z = Math.sin(a) * ISLAND_R * 0.98;
+  for (let r = ISLAND_R * 0.98; r > ISLAND_R * 0.2; r -= 2) {
+    x = Math.cos(a) * r; z = Math.sin(a) * r;
+    const h = heightAt(x, z);
+    if (h > 0.4 && h < 3.2) break;
+  }
+  return new THREE.Vector3(x, 0, z);
+})();
+
+const rig = new THREE.Group();
+{
+  const skin = new THREE.MeshLambertMaterial({ color: 0xd9a67c });
+  const shirt = new THREE.MeshLambertMaterial({ color: 0x7a8a5a });
+  const pants = new THREE.MeshLambertMaterial({ color: 0x4a5568 });
+  const cap = new THREE.MeshLambertMaterial({ color: 0x8a3a2e });
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.32), shirt);
+  torso.position.y = 1.15;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skin);
+  head.position.y = 1.72;
+  const capM = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.42), cap);
+  capM.position.y = 1.92;
+  rig.add(torso, head, capM);
+
+  const legGeo = new THREE.BoxGeometry(0.22, 0.75, 0.26);
+  const armGeo = new THREE.BoxGeometry(0.18, 0.66, 0.2);
+  rig.legL = new THREE.Group(); rig.legL.position.set(-0.14, 0.75, 0);
+  const legLM = new THREE.Mesh(legGeo, pants); legLM.position.y = -0.375; rig.legL.add(legLM);
+  rig.legR = new THREE.Group(); rig.legR.position.set(0.14, 0.75, 0);
+  const legRM = new THREE.Mesh(legGeo, pants); legRM.position.y = -0.375; rig.legR.add(legRM);
+  rig.armL = new THREE.Group(); rig.armL.position.set(-0.38, 1.62, 0);
+  const armLM = new THREE.Mesh(armGeo, shirt); armLM.position.y = -0.3; armLM.rotation.x = 0.0; rig.armL.add(armLM);
+  rig.armR = new THREE.Group(); rig.armR.position.set(0.38, 1.62, 0);
+  const armRM = new THREE.Mesh(armGeo, shirt); armRM.position.y = -0.3; rig.armR.add(armRM);
+  rig.add(rig.legL, rig.legR, rig.armL, rig.armR);
+}
+rig.position.copy(spawn);
+rig.position.y = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
+scene.add(rig);
+
+/* ---------------- 2.5D camera: fixed oblique, no free-look ---------------- */
+
+const CAM_OFFSET = new THREE.Vector3(0, 8.5, 10.5);
+function updateCamera() {
+  camera.position.set(rig.position.x + CAM_OFFSET.x, rig.position.y + CAM_OFFSET.y, rig.position.z + CAM_OFFSET.z);
+  camera.lookAt(rig.position.x, rig.position.y + 1.2, rig.position.z);
+}
+
+/* ---------------- input ---------------- */
+
+const keys = {};
+let started = false;
+const overlay = document.getElementById('overlay');
+const hud = document.getElementById('hud');
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (!started) { started = true; overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }
+  if (e.code === 'Digit1') setClockP(0.02);
+  if (e.code === 'Digit2') setClockP(0.33);
+  if (e.code === 'Digit3') setClockP(0.55);
+  if (e.code === 'Digit4') setClockP(0.85);
+  if (e.code === 'KeyT') gameMin += 15; /* +15 game minutes */
+  if (e.code === 'KeyR') { rig.position.copy(spawn); rig.position.y = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25); }
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+/* ---------------- day / night ---------------- */
+
+/* p in [0,1): [0, 2/3) is day 06:00->18:00, [2/3,1) is night 18:00->06:00
+   (20 min day / 10 min night, PLAN.md §3) */
+const DAY_FRAC = 2 / 3;
+let gameMin = 0;  /* extra game minutes on top of p0 (T key adds to this) */
+let p0 = 0.1;      /* start ~08:00 */
+{ /* dev params: ?t=0..1 time of day, ?start=1 skip the title overlay */
+  const __q = new URLSearchParams(location.search);
+  if (['t'].some((k) => __q.has(k))) p0 = Math.min(0.999, Math.max(0, parseFloat(__q.get('t')) || 0));
+  if (__q.has('start')) {
+    started = true;
+    overlay.style.display = 'none';
+  }
+}
+function clockFromP(p) {
+  if (p < DAY_FRAC) return 6 + 12 * (p / DAY_FRAC);
+  return 18 + 12 * ((p - DAY_FRAC) / (1 - DAY_FRAC));
+}
+function setClockP(p) { p0 = p; }
+function sunElevForP(p) {
+  if (p < DAY_FRAC) {
+    const a = (p / DAY_FRAC) * Math.PI;
+    return Math.sin(a);
+  }
+  return -1;
+}
+const SKY_DAY = new THREE.Color(0x86b8dd);
+const SKY_NIGHT = new THREE.Color(0x060d20);
+const SKY_DUSK = new THREE.Color(0xff8f4a);
+const tmpCol = new THREE.Color();
+let dayFactor = 1;
+function updateSky(dt) {
+  const p = (p0 + gameMin / 1800) % 1;
+  const el = sunElevForP(p);
+  dayFactor = Math.min(1, Math.max(0, (el + 0.06) / 0.24));
+  if (p < DAY_FRAC) {
+    const a = (p / DAY_FRAC) * Math.PI;
+    sun.position.set(Math.cos(a) * 140, Math.max(0.02, el) * 120 + 4, -50);
+    sun.intensity = Math.pow(Math.max(0, el), 0.6) * 1.15;
+  } else {
+    const m = (p - DAY_FRAC) / (1 - DAY_FRAC);
+    moon.position.set(Math.cos(m * Math.PI) * -100, Math.max(0.1, Math.sin(m * Math.PI)) * 90, -40);
+    moon.intensity = 0.16 * Math.sin(m * Math.PI);
+    sun.intensity = 0;
+  }
+  tmpCol.copy(SKY_NIGHT).lerp(SKY_DAY, dayFactor);
+  const duskK = p < DAY_FRAC ? Math.max(0, 1 - Math.abs(el) / 0.3) * 0.45 : 0;
+  tmpCol.lerp(SKY_DUSK, duskK);
+  skyColor.copy(tmpCol);
+  scene.fog.color = skyColor;
+  scene.fog.near = 100; scene.fog.far = 520;
+  hemi.intensity = 0.18 + 0.62 * dayFactor;
+  /* HUD clock */
+  const hc = clockFromP((p0 + gameMin / 1800) % 1);
+  const hh = Math.floor(hc), mm = Math.floor((hc - hh) * 60);
+  const phase = dayFactor > 0.85 ? 'day' : dayFactor > 0.25 ? 'dusk' : 'night';
+  hudText = `⏱ ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  [${phase}]\n` +
+            `🌿 ${zoneAt(heightAt(rig.position.x, rig.position.z))}   ·   ${fps | 0} fps\n` +
+            `seed ${SEED}`;
+}
+
+/* ---------------- main loop ---------------- */
+
+let lastT = 0, fps = 60, hudText = '', fpsAcc = 0, fpsN = 0;
+let walkPhase = 0, face = 0;
+
+function frame(t) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0.016);
+  lastT = t;
+  if (dt > 0) { fpsAcc += 1 / dt; fpsN++; }
+  if (fpsN >= 20) { fps = fpsAcc / fpsN; fpsAcc = 0; fpsN = 0; }
+
+  /* movement: camera is fixed behind +z, so W/S = ∓z, A/D = ∓x */
+  let mx = 0, mz = 0;
+  if (started) {
+    if (keys['KeyW']) mz -= 1;
+    if (keys['KeyS']) mz += 1;
+    if (keys['KeyA']) mx -= 1;
+    if (keys['KeyD']) mx += 1;
+  }
+  const moving = mx !== 0 || mz !== 0;
+  const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 8.5 : 5.5;
+  if (moving) {
+    const l = Math.hypot(mx, mz);
+    rig.position.x += (mx / l) * speed * dt;
+    rig.position.z += (mz / l) * speed * dt;
+    face = Math.atan2(mx, mz);
+    walkPhase += dt * speed * 1.9;
+  }
+  /* keep inside the playable island */
+  const rr = Math.hypot(rig.position.x, rig.position.z);
+  if (rr > ISLAND_R * 1.05) {
+    const k = (ISLAND_R * 1.05) / rr;
+    rig.position.x *= k; rig.position.z *= k;
+  }
+  const ground = Math.max(heightAt(rig.position.x, rig.position.z), WATER - 0.25);
+  rig.position.y += (ground - rig.position.y) * Math.min(1, dt * 12);
+  const targetRot = moving ? face : rig.rotation.y;
+  rig.rotation.y += (targetRot - rig.rotation.y) * Math.min(1, dt * 14);
+  const sw = moving ? Math.sin(walkPhase) * 0.7 : 0;
+  rig.legL.rotation.x = sw; rig.legR.rotation.x = -sw;
+  rig.armL.rotation.x = -sw * 0.6; rig.armR.rotation.x = sw * 0.6;
+
+  updateSky(dt);
+  hud.innerHTML = hudText.replace(/\n/g, '<br>');
+  updateCamera();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

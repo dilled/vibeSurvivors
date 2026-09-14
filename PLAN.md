@@ -121,7 +121,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 
 | Phase | Scope | Gate |
 |---|---|---|
-| **M0** | Three.js scaffold: island terrain, palms/trees, 2.5D camera, day/night | Walkable beach, sun sets |
+| **M0** ✅ | Three.js scaffold: island terrain, palms/trees, 2.5D camera, day/night | Walkable beach, sun sets |
 | **M1** | Survival: stats, water, fire, coconut, spear + **fish**, first crab | 10-min playable fragment |
 | **M2** | Camp: build spot, fence, light, sleep + **one tiger + crabs + gulls** night 1 | First scary night (fun-check: if not tense, stop & fix) |
 | **M3** | Vegetation system (edible/poison/medicinal/growth) + weather (rain/storm) | Foraging is a game, not a checklist |
@@ -131,3 +131,10 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M7** | **Multiplayer:** `VibeSurvivorsPlugin` in `../ServerBase`, `?mp=host:port`, presence + shared world + animals relay | 3 tabs converge on the same island |
 
 M7 is "later" by design — nothing before it depends on the server except the deterministic seed.
+
+## 12. Dev conventions
+
+- **Smoke test (no browser):** `node smoke/run.mjs` — extracts the inline module from index.html, stubs three.js (`smoke/three-stub.mjs`) + DOM, pumps frames, asserts island/spawn/vegetation/movement/day-night. Must print `SMOKE_OK`.
+- **Dev URL params:** `?t=0..1` set time of day, `?start=1` skips the title overlay. Debug keys in-game: `T` +15 min, `1/2/3/4` dawn/noon/dusk/midnight, `R` respawn.
+- **Headless render check:** `python3 -m http.server 8901 &` then `google-chrome --headless=new --no-sandbox --disable-gpu --enable-unsafe-swiftshader --window-size=960,600 --screenshot=/tmp/shot.png "http://127.0.0.1:8901/?t=0.33&start=1"`.
+- **World gen must stay deterministic** (`mulberry32(SEED)`) — ServerBase world-sync (M7) depends on it.
