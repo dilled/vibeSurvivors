@@ -242,6 +242,50 @@ patched += `
   const thC = stats.thirst;
   pump(30);
   if (stats.thirst >= thC) throw new Error('stats should tick again after camp respawn');
+
+  /* ---- M3: fence + camp light/fire integration ---- */
+
+  // lit state tracks fires before the torch exists (no torch yet)
+  if (campIsLit() !== fires.some((f) => Math.hypot(f.x - camp.x, f.z - camp.z) < 8))
+    throw new Error('camp lit state should track nearby fires before the torch');
+
+  // fence: built at camp, one per camp, posts ring the camp at ~4m
+  rig.position.set(camp.x, camp.g, camp.z);
+  actFence();
+  if (!camp.structures.fence) throw new Error('fence was not built');
+  const fenceRef = camp.structures.fence;
+  actFence();
+  if (camp.structures.fence !== fenceRef) throw new Error('fence should not be built twice');
+  const fencePosts = fenceRef.children.filter((c) => c.userData.post);
+  if (fencePosts.length < 14) throw new Error('fence has too few posts: ' + fencePosts.length);
+  const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  for (const p of fencePosts) {
+    const dx = p.position.x - camp.x, dz = p.position.z - camp.z;
+    if (Math.abs(wrapA(Math.atan2(dx, dz) - camp.rot)) < 0.35) throw new Error('a fence post blocks the camp entrance');
+    if (Math.hypot(dx, dz) < 3.6 || Math.hypot(dx, dz) > 4.4) throw new Error('fence post not on the camp ring');
+  }
+  // rails: the fence has horizontal rails between kept posts
+  const rails = fenceRef.children.filter((c) => !c.userData.post);
+  if (rails.length < 24) throw new Error('fence has too few rails: ' + rails.length);
+
+  // torch: standing camp light at the left offset; lights the camp
+  const lrx = -Math.cos(camp.rot), lrz = Math.sin(camp.rot);
+  rig.position.set(camp.x, camp.g, camp.z);
+  actTorch();
+  if (!camp.structures.torch) throw new Error('camp torch was not built');
+  const torchRef = camp.structures.torch;
+  actTorch();
+  if (camp.structures.torch !== torchRef) throw new Error('torch should not be built twice');
+  if (Math.hypot(torchRef.position.x - (camp.x + lrx * 2.0), torchRef.position.z - (camp.z + lrz * 2.0)) > 0.01)
+    throw new Error('torch not at the camp offset');
+  if (!campIsLit()) throw new Error('camp should be lit by its torch');
+
+  // fire integration: a fire lit at the camp also lights it
+  const nFires0 = fires.length;
+  actFire();
+  if (fires.length !== nFires0 + 1) throw new Error('fire at camp was not lit');
+  if (!campIsLit()) throw new Error('camp should be lit by a fire burning in it');
+  if (torchLights.length !== 1) throw new Error('torch should register exactly one standing light');
 }
 `;
 const file = join(here, '.game-smoke.mjs');
