@@ -1,0 +1,8 @@
+# Vendored third-party libraries
+lib/
+vendor/
+
+# Dependencies / generated output if they appear later
+node_modules/
+dist/
+build/
