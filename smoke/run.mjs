@@ -180,6 +180,68 @@ patched += `
 
   // journal collected the learnings
   if (journal.length < 5) throw new Error('journal too short: ' + journal.length);
+
+  /* ---- M2: camp spot + basic structures ---- */
+
+  // camp in the water is rejected (reuse the deep-water point from the drink test)
+  rig.position.set(wx, Math.max(heightAt(wx, wz), WATER - 0.25), wz);
+  actCamp();
+  if (camp !== null) throw new Error('camp should not be placed in the water');
+  if (campCheck(wx, wz).ok) throw new Error('water should fail the camp check');
+
+  // find a valid camp site: flat dry ground, clear of palms/trees/rocks
+  let ccx = null, ccz = null;
+  for (let r = 12; r < ISLAND_R * 0.85 && ccx === null; r += 4) {
+    for (let a = 0; a < Math.PI * 2; a += 0.2) {
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (campCheck(x, z).ok) { ccx = x; ccz = z; break; }
+    }
+  }
+  if (ccx === null) throw new Error('no valid camp site found on the island');
+
+  // establish camp: player position, grounded, faces the player heading
+  const gC = Math.max(heightAt(ccx, ccz), WATER - 0.25);
+  rig.position.set(ccx, gC, ccz);
+  rig.rotation.y = 1.3;
+  actCamp();
+  if (!camp) throw new Error('camp was not established');
+  if (Math.abs(camp.x - ccx) > 0.01 || Math.abs(camp.z - ccz) > 0.01) throw new Error('camp not at the player position');
+  if (Math.abs(camp.g - heightAt(ccx, ccz)) > 0.01) throw new Error('camp not grounded: ' + camp.g.toFixed(2));
+  if (Math.abs(camp.rot - 1.3) > 0.01) throw new Error('camp should face the player heading');
+  if (camp.structures.shelter !== null || camp.structures.bed !== null) throw new Error('new camp should have no structures');
+  const campRef = camp;
+  actCamp();
+  if (camp !== campRef) throw new Error('a second camp should not be placeable');
+
+  // structures: shelter on the right of camp, bed in front; duplicates rejected
+  const rx = Math.cos(camp.rot), rz = -Math.sin(camp.rot);
+  rig.position.set(camp.x + rx * 2.6, Math.max(heightAt(camp.x + rx * 2.6, camp.z + rz * 2.6), 0), camp.z + rz * 2.6);
+  actShelter();
+  if (!camp.structures.shelter) throw new Error('shelter was not built');
+  const shRef = camp.structures.shelter;
+  actShelter();
+  if (camp.structures.shelter !== shRef) throw new Error('shelter should not be built twice');
+  rig.position.set(camp.x, camp.g, camp.z);
+  actBed();
+  if (!camp.structures.bed) throw new Error('bed was not built');
+  const bedRef = camp.structures.bed;
+  actBed();
+  if (camp.structures.bed !== bedRef) throw new Error('bed should not be built twice');
+  if (Math.hypot(shRef.position.x - (camp.x + rx * 2.6)) + Math.abs(shRef.position.z - (camp.z + rz * 2.6)) > 0.01)
+    throw new Error('shelter not at the camp offset');
+
+  // death -> respawn wakes at camp (the M1 ashore respawn was tested earlier, pre-camp)
+  stats.thirst = 0; stats.hunger = 0; stats.health = 0;
+  pump(2);
+  if (!dead) throw new Error('player should be dead for the camp respawn test');
+  respawn();
+  if (dead) throw new Error('respawn failed');
+  if (Math.abs(rig.position.x - camp.x) + Math.abs(rig.position.z - camp.z) > 0.01) throw new Error('respawn should wake at camp');
+  if (Math.abs(rig.position.y - camp.g) > 0.3) throw new Error('camp respawn not grounded');
+  pump(30);
+  const thC = stats.thirst;
+  pump(30);
+  if (stats.thirst >= thC) throw new Error('stats should tick again after camp respawn');
 }
 `;
 const file = join(here, '.game-smoke.mjs');

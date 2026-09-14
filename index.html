@@ -79,6 +79,7 @@
     <div class="row"><span>use &mdash; drink / pick / shake / cook / catch</span><b>E</b></div>
     <div class="row"><span>eat &mdash; coconut / fish / crab</span><b>C &middot; F &middot; V</b></div>
     <div class="row"><span>make fire / make spear</span><b>G &middot; B</b></div>
+    <div class="row"><span>make camp &middot; build shelter / bed</span><b>H &middot; J &middot; K</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
@@ -451,6 +452,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyG') actFire();
   if (e.code === 'KeyB') actCraftSpear();
   if (e.code === 'KeyX') actStrike();
+  if (e.code === 'KeyH') actCamp();
+  if (e.code === 'KeyJ') actShelter();
+  if (e.code === 'KeyK') actBed();
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -661,6 +665,114 @@ const spearMesh = (() => {
   return g;
 })();
 
+/* ---- camp: the player's chosen spot + basic structures (M2) ---- */
+
+/* camp = {x, z, g, rot, grp, flag, structures: {shelter: node|null, bed: node|null}} */
+let camp = null;
+
+/* can a camp be established at (x, z)? dry, flat-ish, clear of vegetation/rocks */
+function campCheck(x, z) {
+  const h = heightAt(x, z);
+  if (h < 0.9) return { ok: false, reason: 'too close to the water' };
+  if (h > 20) return { ok: false, reason: 'too high up for a camp' };
+  let dh = 0;
+  for (let gx = -2; gx <= 2; gx++) {
+    for (let gz = -2; gz <= 2; gz++) {
+      const d = Math.abs(heightAt(x + gx, z + gz) - h);
+      if (d > dh) dh = d;
+    }
+  }
+  if (dh > 1.6) return { ok: false, reason: 'the ground is too steep' };
+  for (const p of palms) if (Math.hypot(p.x - x, p.z - z) < 2.2) return { ok: false, reason: 'a palm stands in the way' };
+  for (const t of bigTrees) if (Math.hypot(t.x - x, t.z - z) < 2.8) return { ok: false, reason: 'a big tree stands in the way' };
+  for (const r of rocks) if (Math.hypot(r.x - x, r.z - z) < 2.2) return { ok: false, reason: 'too close to the rocks' };
+  return { ok: true, reason: '' };
+}
+
+function makeCamp(x, z) {
+  const g = heightAt(x, z);
+  const grp = new THREE.Group();
+  grp.position.set(x, g, z);
+  /* packed-earth pad */
+  const pad = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.1, 3.4, 0.12, 12),
+    new THREE.MeshLambertMaterial({ color: 0xb09a6a }));
+  pad.position.y = 0.03;
+  grp.add(pad);
+  /* flagpole — the camp is visible on the horizon */
+  const poleGeo = new THREE.CylinderGeometry(0.05, 0.07, 3.2, 5);
+  poleGeo.translate(0, 1.6, 0);
+  const pole = new THREE.Mesh(poleGeo, new THREE.MeshLambertMaterial({ color: 0x7a5b3a }));
+  const flag = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 0.5, 0.05),
+    new THREE.MeshLambertMaterial({ color: 0xc9483a }));
+  flag.position.set(0.5, 2.9, 0);
+  grp.add(pole, flag);
+  scene.add(grp);
+  camp = { x, z, g, rot: rig.rotation.y, grp, flag,
+           structures: { shelter: null, bed: null } };
+  return camp;
+}
+
+/* lean-to: A-frame ridge, thatch walls, open side faces the camp centre */
+function buildShelterMesh(px, py, pz, ry) {
+  const grp = new THREE.Group();
+  grp.position.set(px, py, pz);
+  grp.rotation.y = ry;
+  const thatch = new THREE.MeshLambertMaterial({ color: 0x8a7a4d });
+  const frame = new THREE.MeshLambertMaterial({ color: 0x6e4f33 });
+  const ground = new THREE.Mesh(new THREE.BoxGeometry(3, 0.08, 2.2),
+    new THREE.MeshLambertMaterial({ color: 0x9a8a52 }));
+  ground.position.y = 0.1;
+  grp.add(ground);
+  const a = Math.atan2(2.0, 1.5);
+  const panelGeo = new THREE.BoxGeometry(Math.hypot(1.5, 2.0) + 0.35, 0.08, 2.2);
+  const pL = new THREE.Mesh(panelGeo, thatch);
+  pL.position.set(-0.72, 1.05, 0); pL.rotation.z = a;
+  const pR = new THREE.Mesh(panelGeo, thatch);
+  pR.position.set(0.72, 1.05, 0); pR.rotation.z = -a;
+  grp.add(pL, pR);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 0.08), thatch);
+  back.position.set(0, 0.8, -1.06);
+  grp.add(back);
+  const postGeo = new THREE.CylinderGeometry(0.06, 0.06, 2, 4);
+  const postL = new THREE.Mesh(postGeo, frame); postL.position.set(-1.5, 1, -1.0);
+  const postR = new THREE.Mesh(postGeo, frame); postR.position.set(1.5, 1, -1.0);
+  grp.add(postL, postR);
+  scene.add(grp);
+  return grp;
+}
+
+/* palm-leaf bed on a driftwood frame, pillow to the left */
+function buildBedMesh(px, py, pz, ry) {
+  const grp = new THREE.Group();
+  grp.position.set(px, py, pz);
+  grp.rotation.y = ry;
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 0.15, 0.8),
+    new THREE.MeshLambertMaterial({ color: 0x6e4f33 }));
+  frame.position.y = 0.22;
+  const mat = new THREE.Mesh(
+    new THREE.BoxGeometry(1.3, 0.3, 0.7),
+    new THREE.MeshLambertMaterial({ color: 0x9a8a52 }));
+  mat.position.y = 0.45;
+  const pillow = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.15, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0xe8e0c8 }));
+  pillow.position.set(-0.4, 0.65, 0);
+  grp.add(frame, mat, pillow);
+  scene.add(grp);
+  return grp;
+}
+
+function campOffsets(type) {
+  const fx = Math.sin(camp.rot), fz = Math.cos(camp.rot);   /* forward */
+  const rx = Math.cos(camp.rot), rz = -Math.sin(camp.rot);  /* right */
+  return type === 'shelter'
+    ? { x: camp.x + rx * 2.6, z: camp.z + rz * 2.6 }
+    : { x: camp.x + fx * 2.4, z: camp.z + fz * 2.4 };
+}
+
 /* ---- actions (bound to keys below; also callable from the smoke test) ---- */
 function playerPos() {
   const x = rig.position.x, z = rig.position.z;
@@ -754,6 +866,44 @@ function actFire() {
   journal.push('you light a fire');
   toast('\u{1F525} a fire \u2014 light, and something to cook over');
 }
+function actCamp() {
+  if (dead) return;
+  if (camp) { toast('\u26FA\uFE0F your camp is already established'); return; }
+  const { x, z } = playerPos();
+  const chk = campCheck(x, z);
+  if (!chk.ok) { toast('no camp here \u2014 ' + chk.reason); return; }
+  makeCamp(x, z);
+  learn('camp', 'you make your camp \u2014 flat dry ground, a flag, your place on the island');
+  toast('\u26FA\uFE0F camp established \u2014 this is your ground');
+}
+function actShelter() {
+  if (dead) return;
+  if (!camp) { toast('establish a camp first \u2014 H'); return; }
+  if (camp.structures.shelter) { toast('the shelter is already built'); return; }
+  if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
+    toast('build by your camp \u2014 it is over there');
+    return;
+  }
+  const o = campOffsets('shelter');
+  camp.structures.shelter = buildShelterMesh(o.x, heightAt(o.x, o.z), o.z,
+    Math.atan2(camp.x - o.x, camp.z - o.z));
+  learn('shelter', 'shelter: a lean-to of palm leaf and driftwood \u2014 J');
+  toast('\u26D3\uFE0F shelter built');
+}
+function actBed() {
+  if (dead) return;
+  if (!camp) { toast('establish a camp first \u2014 H'); return; }
+  if (camp.structures.bed) { toast('the bed is already made'); return; }
+  if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
+    toast('build by your camp \u2014 it is over there');
+    return;
+  }
+  const o = campOffsets('bed');
+  camp.structures.bed = buildBedMesh(o.x, heightAt(o.x, o.z), o.z,
+    Math.atan2(camp.x - o.x, camp.z - o.z));
+  learn('bed', 'bed: palm leaf on a driftwood frame \u2014 K');
+  toast('\uD83D\uDECF\uFE0F bed made');
+}
 function actCraftSpear() {
   if (dead || spear) return;
   spear = true;
@@ -814,9 +964,14 @@ function respawn() {
   deadEl.style.display = 'none';
   stats.thirst = stats.hunger = stats.health = 100;
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
-  const g = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
-  rig.position.set(spawn.x, g, spawn.z);
-  toast('you wash ashore again \u2014 what you carried is gone');
+  if (camp) {
+    rig.position.set(camp.x, camp.g, camp.z);
+    toast('you wake at your camp \u2014 what you carried is gone');
+  } else {
+    const g = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
+    rig.position.set(spawn.x, g, spawn.z);
+    toast('you wash ashore again \u2014 what you carried is gone');
+  }
 }
 
 /* context-dependent action hint */
@@ -834,6 +989,15 @@ function contextHint() {
     return 'E \u2014 catch the crab (walk slowly!)';
   if (palms.some((p) => p.cocos > 0 && Math.hypot(p.x - x, p.z - z) < 3.5))
     return 'E \u2014 shake the palm';
+  if (!camp) {
+    if (campCheck(x, z).ok) return 'H \u2014 make camp here';
+  } else if (Math.hypot(x - camp.x, z - camp.z) < 10 &&
+             (!camp.structures.shelter || !camp.structures.bed)) {
+    const missing = [];
+    if (!camp.structures.shelter) missing.push('J \u2014 build a shelter');
+    if (!camp.structures.bed) missing.push('K \u2014 make a bed');
+    return missing.join('  \u00B7  ');
+  }
   if (spear && h < 0.6 && schools.some((s) => s.n > 0 && Math.hypot(s.x - x, s.z - z) < 5))
     return 'X \u2014 spear the school';
   if (!spear) return 'B \u2014 make a spear   \u00B7   G \u2014 make a fire   \u00B7   C/F/V \u2014 eat coconut/fish/crab';
@@ -912,12 +1076,16 @@ function updateSky(dt) {
   const hh = Math.floor(hc), mm = Math.floor((hc - hh) * 60);
   const phase = dayFactor > 0.85 ? 'day' : dayFactor > 0.25 ? 'dusk' : 'night';
   const bar = (v) => { const f = Math.round(v / 10); return '█'.repeat(f) + '░'.repeat(10 - f); };
+  const campLine = camp
+    ? 'camp \u2014 ' + (['shelter', 'bed'].filter((t) => camp.structures[t]).join(' \u00B7 ') || 'empty ground')
+    : 'no camp \u2014 H on flat dry land';
   const hp = `⏱ ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  [${phase}]\n` +
             `🌿 ${zoneAt(heightAt(rig.position.x, rig.position.z))}   ·   ${fps | 0} fps\n` +
             `💧 ${bar(stats.thirst)} ${String(stats.thirst | 0).padStart(3, ' ')}\n` +
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
             `🥥 ${INV.coconut}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
+            `⛺🛖 ${campLine}\n` +
             `seed ${SEED}`;
   hudText = hp;
 }
