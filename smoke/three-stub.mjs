@@ -114,6 +114,7 @@ class Light extends Node {
 }
 export class HemisphereLight extends Light {}
 export class DirectionalLight extends Light {}
+export class PointLight extends Light { constructor(color, intensity, distance = 0) { super(color, intensity); this.distance = distance; } }
 
 export class Fog { constructor(color, near, far) { this.color = color instanceof Color ? color : new Color(color); this.near = near; this.far = far; } }
 

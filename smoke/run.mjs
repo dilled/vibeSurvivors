@@ -82,6 +82,104 @@ patched += `
   if (sun.intensity !== 0) throw new Error('sun should be off at night');
   if (skyColor.r > dayR) throw new Error('night sky should be darker than day sky');
   setClockP(0.33); pump(3);
+
+  /* ---- M1: survival ---- */
+
+  // world placements are seeded
+  if (schools.length !== 5) throw new Error('expected 5 fish schools: ' + schools.length);
+  if (schools.some((s) => s.n < 8 || s.n > 13)) throw new Error('fish school size out of band');
+  if (crabs.length !== 6) throw new Error('expected 6 crabs: ' + crabs.length);
+
+  // stats tick down in real time; clock advances
+  const th0 = stats.thirst, hu0 = stats.hunger, gm0 = gameMin;
+  pump(30);
+  if (stats.thirst >= th0) throw new Error('thirst should drain');
+  if (stats.hunger >= hu0) throw new Error('hunger should drain');
+  if (gameMin <= gm0) throw new Error('clock should advance');
+
+  // fire + cook: teleport to the beach spawn, light a fire, cook a raw fish
+  const gSpawn = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
+  rig.position.set(spawn.x, gSpawn, spawn.z);
+  INV.fishRaw = 1;
+  actFire();
+  if (fires.length !== 1) throw new Error('fire was not lit');
+  if (fires[0].g < 0.35) throw new Error('fire lit in water');
+  actUse();
+  if (!fires[0].cooking) throw new Error('cooking did not start');
+  pump(200); // > 2.5s cook
+  if (INV.fishRaw !== 0 || INV.fishCooked !== 1) throw new Error('fish was not cooked: ' + INV.fishRaw + '/' + INV.fishCooked);
+
+  // drink: find deep water, teleport, press E
+  let wx = null, wz = null;
+  outer: for (let r = 20; r < ISLAND_R * 1.05 && wx === null; r += 6) {
+    for (let a = 0; a < Math.PI * 2; a += 0.35) {
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (heightAt(x, z) < -0.8) { wx = x; wz = z; break outer; }
+    }
+  }
+  if (wx === null) throw new Error('no water found for drink test');
+  stats.thirst = 50;
+  drinkCd = 0;
+  rig.position.set(wx, Math.max(heightAt(wx, wz), WATER - 0.25), wz);
+  actUse();
+  pump(1);
+  if (stats.thirst < 84) throw new Error('drink did not restore thirst: ' + stats.thirst.toFixed(1));
+
+  // coconuts: shake a palm, wait for the drop, pick it up, eat it
+  const palm0 = palms.find((p) => p.cocos === 2 && heightAt(p.x, p.z) >= 1);
+  if (!palm0) throw new Error('no palm with coconuts on land');
+  rig.position.set(palm0.x, Math.max(heightAt(palm0.x, palm0.z), WATER - 0.25), palm0.z);
+  const huC = stats.hunger;
+  actUse();
+  if (items.length !== 1 || palm0.cocos !== 1) throw new Error('palm did not drop a coconut');
+  pump(150); // fall from ~6m
+  if (items[0].state !== 'ground') throw new Error('coconut did not land: ' + items[0].state);
+  actUse();
+  if (INV.coconut !== 1 || !items[0].taken) throw new Error('coconut was not picked up');
+  eatCoconut();
+  if (INV.coconut !== 0 || stats.hunger <= huC) throw new Error('eating a coconut did nothing');
+
+  // spear + fish: craft the spear, teleport to a school, strike
+  actCraftSpear();
+  if (!spear || !spearMesh.visible) throw new Error('spear was not crafted');
+  const s0 = schools[0];
+  rig.position.set(s0.x, Math.max(heightAt(s0.x, s0.z), WATER - 0.25), s0.z);
+  const n0 = s0.n;
+  actStrike();
+  if (INV.fishRaw !== 1 || s0.n !== n0 - 1) throw new Error('spear did not catch a fish');
+  actStrike(); // on cooldown
+  if (s0.n !== n0 - 1) throw new Error('strike cooldown not enforced');
+  pump(100);
+
+  // crabs: teleport next to one, E catches it (shakes nearby palms first if any)
+  const crabT = crabs.find((c) => c.alive && Math.hypot(c.hx - spawn.x, c.hz - spawn.z) > 4);
+  if (!crabT) throw new Error('no crab available for catch test');
+  let cx = crabT.x + 1.2, cz = crabT.z;
+  for (let k = 0; k < 8; k++) {   /* stand on dry sand, not in the drink band */
+    const a2 = (k * Math.PI) / 4;
+    const px = crabT.x + Math.cos(a2) * 1.2, pz = crabT.z + Math.sin(a2) * 1.2;
+    if (heightAt(px, pz) >= 0.3) { cx = px; cz = pz; break; }
+  }
+  rig.position.set(cx, Math.max(heightAt(cx, cz), WATER - 0.25), cz);
+  for (let i = 0; i < 12 && crabT.alive; i++) actUse();
+  if (crabT.alive) throw new Error('crab was not caught');
+  if (INV.crab !== 1) throw new Error('crab not added to inventory');
+
+  // death + respawn
+  stats.thirst = 0; stats.hunger = 0; stats.health = 0;
+  pump(2);
+  if (!dead) throw new Error('player should be dead at 0 health');
+  if (deadEl.style.display !== 'flex') throw new Error('death overlay not shown');
+  respawn();
+  if (dead || stats.thirst !== 100 || stats.hunger !== 100 || stats.health !== 100) throw new Error('respawn did not restore stats');
+  if (INV.coconut + INV.fishRaw + INV.fishCooked + INV.crab + INV.crabCooked !== 0) throw new Error('respawn should drop inventory');
+  if (Math.abs(rig.position.x - spawn.x) + Math.abs(rig.position.z - spawn.z) > 0.01) throw new Error('respawn did not move player to spawn');
+  const thR = stats.thirst;
+  pump(30);
+  if (stats.thirst >= thR) throw new Error('stats should tick again after respawn');
+
+  // journal collected the learnings
+  if (journal.length < 5) throw new Error('journal too short: ' + journal.length);
 }
 `;
 const file = join(here, '.game-smoke.mjs');
