@@ -4,13 +4,15 @@ title: Multiplayer is deferred to M7 via ../ServerBase
 category: decision
 status: active
 created: "2026-09-14T18:41:08"
-updated: "2026-09-14T18:41:40"
+updated: "2026-09-15T00:03:24"
 ---
 
 <!-- compiled_truth -->
-Decided: multiplayer is a **later milestone (M7)**, implemented as `VibeSurvivorsPlugin` inside `../ServerBase` — a C++20 uWebSockets executable following the `VibeCraftPlugin` pattern: the **first client is world-authority** (owns island gen from the shared seed, animal sim, vegetation/build edits), the server relays ~30 Hz ticks and **broadcasts the full applied-edit history on join/late-join** so all clients converge. v1-mp syncs player presence, shared world edits, animal state near authority, weather + time-of-day. Client hook: `?mp=host:port` URL param; without it the game is pure single-player (server optional). Explicitly NOT in v1-mp: inventory sync, death/respawn rules, shared journal, host migration.
+Decided: multiplayer is a **later milestone (M7)**, implemented as `VibeSurvivorsPlugin` inside `../ServerBase` — a C++20 uWebSockets executable. **v1-mp model: v2-style relay** (like `VibeCraftPlugin`) — the **first client is world-authority** (owns island gen from the shared seed, animal sim, vegetation/build edits), the server relays ~30 Hz ticks and **broadcasts the full applied-edit history on join/late-join** so all clients converge. v1-mp syncs player presence, shared world edits, animal state near authority, weather + time-of-day. Client hook: `?mp=host:port` URL param; without it the game is pure single-player (server optional). Explicitly NOT in v1-mp: inventory sync, death/respawn rules, shared journal, host migration.
 
-Alternatives considered: server-authoritative sim (rejected: far more C++ work for v1-mp, matches VibeCraft's accepted trade-off later); no multiplayer (rejected: it is a planned milestone, only deferred).
+**Future (mp v2+), NOT now: move to the vibeGTA v3 model — server is world-authority.** The plugin owns world gen, animal/traffic sim, and world edits (applies them itself, rollbacks on rejection); clients upload their own-body state @30 Hz and the server plausibility-checks + stamps grants; hard-version the protocol at the switch. Note: neither house project simulates from client *inputs* — clients send state, server validates.
+
+Alternatives considered: server-authoritative sim (deferred to mp v2+, not rejected — more C++ work than v1 needs, matches vibeGTA plugin); no multiplayer (rejected: it is a planned milestone, only deferred).
 
 
 ## Timeline
@@ -25,4 +27,10 @@ Alternatives considered: server-authoritative sim (rejected: far more C++ work f
   kind: decision
   summary: "mp deferred to M7; VibeSurvivorsPlugin, world-authority client relay"
   source: "PLAN.md §9"
+  affects: [multiplayer-deferred-serverbase]
+
+- time: 2026-09-15T00:03:24
+  kind: decision
+  summary: "Server-authoritative model not rejected: deferred to mp v2+ (vibeGTA v3 pattern). v1-mp stays on the v2 first-client-authority relay."
+  source: "PLAN.md §9 (user-directed addition)"
   affects: [multiplayer-deferred-serverbase]

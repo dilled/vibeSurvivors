@@ -107,6 +107,7 @@ Follow the established pattern exactly (see `ServerBase/ReadMe.md`, `VibeCraftPl
 - **Client hook:** `?mp=host:port` URL param exactly like vibeCraft; without it, pure single-player (server optional).
 - **Session identity:** per-tab session, first-run name + avatar prompt stored in localStorage (house pattern).
 - **Deliberately NOT in v1-mp:** inventory sync, death/respawn rules, shared journal, host-migration. Those come in mp v2+ if v1 lands.
+- **Future (mp v2+), NOT now:** move to the **vibeGTA v3 model — server is world-authority**: the plugin owns world gen, animal sim, and world edits (applies them itself, rollbacks on rejection), clients upload their own-body state @30 Hz and the server plausibility-checks + stamps grants. Hard-version the protocol at the switch. v1-mp stays on the v2 relay model above.
 
 ### Sequencing decision
 Ship **single-player first** (it must be fun with zero multiplayer), then the plugin. The deterministic-seed requirement in §3 is the *only* thing v1 must design for mp upfront.
