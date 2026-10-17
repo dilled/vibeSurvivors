@@ -922,8 +922,7 @@ function updateCrabs(dt) {
         c.dir += (Math.random() - 0.5) * 2.4;
       }
     }
-    const dh = Math.hypot(c.x - c.hx, c.z - c.hz);
-    if (dh > 9) c.dir = Math.atan2(c.hx - c.x, c.hz - c.z);
+    faceHome(c, 9);   /* M12: keep the forage loop near the home beach */
     /* M6: crabs are bolder after dark — the night forage loop works */
     const nightK = dayFactor < 0.5 ? 1.6 : 1.0;
     const speed = (c.fleeT > 0 ? 2.3 : 1.0) * nightK;
@@ -946,6 +945,7 @@ const TIG_STALK_R = 14, TIG_CHASE_END = 22, TIG_ATTACK_R = 1.5;
 const TIG_ATK_CD = 5, TIG_ATK_DMG = 30, FIRE_AVOID_R = 10;
 const TIG_FLEE_END_R = 15;   /* flee keeps priority until this margin is cleared */
 const TIG_SPEED = { patrol: 2.0, stalk: 5.0, chase: 7.0, flee: 6.0 };
+const TIG_WANDER = { f1: 0.07, f2: 0.09, rx: 13, rz: 11, homeR: 20, minStep: 0.8, speed: TIG_SPEED.patrol };   /* M12: shared home-wander params */
 
 /* nearest lit fire or the standing camp torch ‒ the tiger's counter */
 function nearestFire(x, z) {
@@ -1075,8 +1075,8 @@ function updateTigers(dt) {
       /* day: return to home and hide */
       t.state = 'hide';
       if (t.panicT > 0) t.panicT -= dt;   /* don't let a panic linger into the day */
-      const dh = Math.hypot(t.hx - t.x, t.hz - t.z);
-      if (dh > 0.3) { dir = Math.atan2(t.hx - t.x, t.hz - t.z); speed = TIG_SPEED.patrol; }
+      const hs = returnHome(t, TIG_SPEED.patrol);   /* M12 */
+      if (hs > 0) { dir = t.dir; speed = hs; }
     } else {
       const nf = nearestFire(t.x, t.z);
       /* M11: rain masks fire and smoke, so tigers fear fires less in wet weather */
@@ -1108,16 +1108,10 @@ function updateTigers(dt) {
           dir = Math.atan2(px - t.x, pz - t.z);
           speed = TIG_SPEED.chase;
         } else {
-          /* patrol: deterministic wander around the territory home */
-          const wx = t.hx + Math.sin(runT * 0.07 + t.phase) * 13;
-          const wz = t.hz + Math.cos(runT * 0.09 + t.phase * 1.7) * 11;
-          if (Math.hypot(t.hx - t.x, t.hz - t.z) > 20) {
-            dir = Math.atan2(t.hx - t.x, t.hz - t.z);
-          } else {
-            const dx = wx - t.x, dz = wz - t.z;
-            if (Math.hypot(dx, dz) > 0.8) dir = Math.atan2(dx, dz);
-          }
-          speed = TIG_SPEED.patrol;
+          /* patrol: deterministic wander around the territory home (M12) */
+          const mv = homeWander(t, TIG_WANDER);
+          dir = mv.dir;
+          speed = mv.speed;
         }
         if ((t.state === 'stalk' || t.state === 'chase') && dist < TIG_ATTACK_R && t.atkCd <= 0) {
           t.atkCd = TIG_ATK_CD;
@@ -1135,14 +1129,7 @@ function updateTigers(dt) {
         }
       }
     }
-    if (speed > 0) {
-      /* dir = atan2(dx, dz) like the player face; three.js forward is (sin, cos) */
-      const nx = t.x + Math.sin(dir) * speed * dt;
-      const nz = t.z + Math.cos(dir) * speed * dt;
-      if (heightAt(nx, nz) >= 0.5) { t.x = nx; t.z = nz; }
-      /* otherwise the tiger stops at the shoreline */
-    }
-    t.dir = dir;
+    applyMove(t, dir, speed, dt, (x, z) => heightAt(x, z) >= 0.5);   /* M12: stops at the shoreline */
     t.grp.position.set(t.x, heightAt(t.x, t.z), t.z);
     t.grp.rotation.y = dir;
     for (let i = 0; i < t.legs.length; i++)
@@ -1157,6 +1144,7 @@ function updateTigers(dt) {
    system supersedes this. Spawn rng() calls live strictly AFTER the tiger
    block (determinism). */
 const GULL_SPEED = 8.5, GULL_ALT = 2.2;
+const GULL_WANDER = { f1: 0.11, f2: 0.13, rx: 20, rz: 16, homeR: 26, minStep: 1, pm: 1.6, speed: GULL_SPEED, still: 0 };   /* M12: shared home-wander params (still: hovers) */
 const GULL_STEAL_R = 12, GULL_STEAL_CD = 45;
 const GULL_DIVE_R = 15, GULL_DIVE_DMG = 8, GULL_DIVE_TELL = 3, GULL_DIVE_CD = 60;
 const GULL_FOOD_ORDER = ['crabCooked', 'fishCooked', 'crab', 'fishRaw', 'coconut'];
@@ -1208,6 +1196,9 @@ const gulls = [];
 let gullDiveCd = 0;    /* global dive-bomb cooldown */
 let gullWaterT = 0;    /* seconds left of the "something is in the water" inland drift */
 let gullPanicT = 0;    /* M11: seconds of storm-quiet left (set by a lightning strike) */
+function stormQuietGulls() {   /* M11: the flock goes quiet in a storm, or right after a strike */
+  return effectiveWeather() === 'storm' || gullPanicT > 0;
+}
 function updateGulls(dt) {
   if (!started || dead) return;
   const px = rig.position.x, pz = rig.position.z;
@@ -1216,18 +1207,18 @@ function updateGulls(dt) {
   gullWaterT = Math.max(0, gullWaterT - dt);
   gullPanicT = Math.max(0, gullPanicT - dt);
   const carrying = GULL_FOOD_ORDER.some((k) => INV[k] > 0);
-  const stormQuiet = effectiveWeather() === 'storm' || gullPanicT > 0;   /* M11 */
+  const stormQuiet = stormQuietGulls();   /* M11 */
   for (const gu of gulls) {
     if (gu.stealCd > 0) gu.stealCd -= dt;
     let dir = gu.dir, speed = 0;
     if (dayFactor < 0.5) {
       /* night: fly home and perch still (the tiger's "hide" pattern) */
-      const dh = Math.hypot(gu.hx - gu.x, gu.hz - gu.z);
-      if (dh > 0.3) { dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z); speed = GULL_SPEED * 0.8; }
+      const hs = returnHome(gu, GULL_SPEED * 0.8);   /* M12 */
+      if (hs > 0) { dir = gu.dir; speed = hs; }
     } else if (stormQuiet) {
       /* M11: the flock goes quiet in a storm ‒ home to perch, no steal, no dive */
-      const dh = Math.hypot(gu.hx - gu.x, gu.hz - gu.z);
-      if (dh > 0.3) { dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z); speed = GULL_SPEED * 0.8; }
+      const hs = returnHome(gu, GULL_SPEED * 0.8);   /* M12 */
+      if (hs > 0) { dir = gu.dir; speed = hs; }
     } else {
       /* day: deterministic sin/cos hover-wander around home (no rng per frame) */
       if (gullWaterT > 0) {
@@ -1235,15 +1226,9 @@ function updateGulls(dt) {
         dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z);
         speed = GULL_SPEED * 0.6;
       } else {
-        const wx = gu.hx + Math.sin(runT * 0.11 + gu.phase) * 20;
-        const wz = gu.hz + Math.cos(runT * 0.13 + gu.phase * 1.6) * 16;
-        if (Math.hypot(gu.hx - gu.x, gu.hz - gu.z) > 26) {
-          dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z);
-          speed = GULL_SPEED;
-        } else {
-          const dx = wx - gu.x, dz = wz - gu.z;
-          if (Math.hypot(dx, dz) > 1) { dir = Math.atan2(dx, dz); speed = GULL_SPEED; }
-        }
+        const mv = homeWander(gu, GULL_WANDER);   /* M12: deterministic hover-wander (no rng per frame) */
+        dir = mv.dir;
+        speed = mv.speed;
       }
       /* steal: take exactly one carried food item, per-gull cooldown */
       if (gu.stealCd <= 0 && carrying && Math.hypot(px - gu.x, pz - gu.z) < GULL_STEAL_R) {
@@ -1275,12 +1260,7 @@ function updateGulls(dt) {
           learn('gullscare', 'the gulls scream and pull inland \u2014 something is in the water');
       }
     }
-    if (speed > 0) {
-      const nx = gu.x + Math.sin(dir) * speed * dt;
-      const nz = gu.z + Math.cos(dir) * speed * dt;
-      if (heightAt(nx, nz) >= 0.3) { gu.x = nx; gu.z = nz; }
-    }
-    gu.dir = dir;
+    applyMove(gu, dir, speed, dt, (x, z) => heightAt(x, z) >= 0.3);   /* M12 */
     gu.grp.position.set(gu.x, heightAt(gu.x, gu.z) + GULL_ALT, gu.z);
     gu.grp.rotation.y = dir;
     const flap = speed > 0 ? Math.sin(runT * 16 + gu.phase) * 0.5 : 0.1;
@@ -1288,6 +1268,94 @@ function updateGulls(dt) {
     gu.wingR.rotation.z = -flap;
   }
 }
+
+/* ---- animal framework (M12): shared state/behaviour foundation for all
+   species. A species is a descriptor (population array, home band, activity
+   window, speeds, home-pull radius, terrain rule, threat/tell notes, phase)
+   plus a per-species step hook. New species (M13+) register here ‒ descriptor
+   + spawn block + mesh builder + step hook, no bespoke world wiring. The M11
+   lightning panic is the first all-species hook and lives here as
+   panicWildlife. ---- */
+const animals = [];
+function registerAnimal(species) { animals.push(species); return species; }
+
+/* M12: deterministic sin/cos wander around a home band (the tiger/school/gull
+   pattern). cfg = { f1, f2, rx, rz, homeR, minStep, speed, still, pm }.
+   Returns { dir, speed }; below minStep it holds (still defaults to speed). */
+function homeWander(a, cfg) {
+  if (Math.hypot(a.hx - a.x, a.hz - a.z) > cfg.homeR)
+    return { dir: Math.atan2(a.hx - a.x, a.hz - a.z), speed: cfg.speed };
+  const wx = a.hx + Math.sin(runT * cfg.f1 + a.phase) * cfg.rx;
+  const wz = a.hz + Math.cos(runT * cfg.f2 + a.phase * (cfg.pm || 1.7)) * cfg.rz;
+  const dx = wx - a.x, dz = wz - a.z;
+  if (Math.hypot(dx, dz) > cfg.minStep) return { dir: Math.atan2(dx, dz), speed: cfg.speed };
+  return { dir: a.dir, speed: cfg.still === undefined ? cfg.speed : cfg.still };
+}
+/* M12: pull back to the home point (tiger hide / gull night perch). */
+function returnHome(a, speed, minStep = 0.3) {
+  if (Math.hypot(a.hx - a.x, a.hz - a.z) > minStep) { a.dir = Math.atan2(a.hx - a.x, a.hz - a.z); return speed; }
+  return 0;
+}
+/* M12: steer toward home only past the radius (crab forage loop). */
+function faceHome(a, r) {
+  if (Math.hypot(a.x - a.hx, a.z - a.hz) > r) a.dir = Math.atan2(a.hx - a.x, a.hz - a.z);
+}
+/* M12: move along dir (dir = atan2(dx, dz) like the player face; three.js
+   forward is (sin, cos)); the terrain rule can veto the step (shoreline). */
+function applyMove(a, dir, speed, dt, terrainOK) {
+  if (speed > 0) {
+    const nx = a.x + Math.sin(dir) * speed * dt;
+    const nz = a.z + Math.cos(dir) * speed * dt;
+    if (terrainOK(nx, nz)) { a.x = nx; a.z = nz; }
+  }
+  a.dir = dir;
+}
+/* M12: the all-species panic hook (M11 lightning effects, unchanged): every
+   tiger flees the spot, the gull flock goes quiet, nearby crabs scuttle. */
+function panicWildlife(x, z) {
+  for (const t of tigers) { t.panicT = 6; t.panicX = x; t.panicZ = z; }
+  gullPanicT = 5;
+  for (const c of crabs)
+    if (c.alive && Math.hypot(c.x - x, c.z - z) < 25) { c.fleeT = 3; c.dir = Math.atan2(c.x - x, c.z - z); }
+}
+/* M12: run a phase of the animal registry. 'early' species (fish, crabs) run
+   before weather/sky on the previous frame's dayFactor; 'late' species
+   (tigers, then gulls) run after updateSky. frame() keeps the M0-M11 order. */
+function updateAnimals(dt, phase) {
+  for (const sp of animals) if (sp.phase === phase) sp.step(dt);
+}
+
+/* M12: the four reference species, registered with their verbatim M1/M4/M5/
+   M6/M11 behaviour as the framework's example shapes. M13+ species follow
+   the same descriptor + step-hook pattern. */
+registerAnimal({
+  id: 'fish', label: 'fish schools', pop: schools, phase: 'early',
+  band: 'water -1.8..-0.2', count: 5, active: () => true,
+  step: (dt) => updateSchools(dt),
+  tells: 'speared with X (M4); storm lagoon surge displacement (M11)',
+});
+registerAnimal({
+  id: 'crab', label: 'crabs', pop: crabs, phase: 'early',
+  band: 'beach 0.35..1.5', count: 9, active: () => true,
+  speed: { walk: 1.0, flee: 2.3, nightK: 1.6 }, homeR: 9,
+  step: (dt) => updateCrabs(dt),
+  tells: 'caught by hand (M1); sprint-flee; bolder at night (M6); scuttle from lightning (M11)',
+});
+registerAnimal({
+  id: 'tiger', label: 'tigers', pop: tigers, phase: 'late',
+  band: 'jungle 7..20', count: 3, active: () => dayFactor < 0.5,
+  speed: TIG_SPEED, homeR: 20, terrainOK: (x, z) => heightAt(x, z) >= 0.5,
+  step: (dt) => updateTigers(dt),
+  threat: 'dusk/night patrol-stalk-chase; strike drops loot + festering wound (M5); fires and torchlight drive it off; lightning panic (M11)',
+});
+registerAnimal({
+  id: 'gull', label: 'gulls', pop: gulls, phase: 'late',
+  band: 'coast 0.3..6', count: 5, active: () => dayFactor >= 0.5 && !stormQuietGulls(),
+  speed: { fly: GULL_SPEED, perch: GULL_SPEED * 0.8 }, homeR: 26,
+  terrainOK: (x, z) => heightAt(x, z) >= 0.3,
+  step: (dt) => updateGulls(dt),
+  threat: 'steals one carried food, 3 s telegraphed dive (M6); storm-quiet (M11); water scare foreshadows the shark (M15)',
+});
 
 /* ---- the spear (attached to the right arm) ---- */
 const spearMesh = (() => {
@@ -2036,10 +2104,7 @@ function doLightning(x, z) {   /* M11: a strike lands on the island */
     checkDeath();
   }
   /* everything else panics: tigers flee the spot, gulls go quiet, crabs scuttle */
-  for (const t of tigers) { t.panicT = 6; t.panicX = x; t.panicZ = z; }
-  gullPanicT = 5;
-  for (const c of crabs)
-    if (c.alive && Math.hypot(c.x - x, c.z - z) < 25) { c.fleeT = 3; c.dir = Math.atan2(c.x - x, c.z - z); }
+  panicWildlife(x, z);   /* M12: the all-species panic hook (same effects) */
 }
 function dropCoconut(p) {   /* M11: extracted from actUse so the storm wind can reuse it */
   p.cocos--;
@@ -2286,15 +2351,13 @@ function frame(t) {
   updateItems(dt);
   updateFires(dt);
   updateTorchLights(dt);
-  updateSchools(dt);
-  updateCrabs(dt);
+  updateAnimals(dt, 'early');   /* M12: fish + crabs, pre-frame dayFactor (before weather/sky) */
   hintEl.textContent = contextHint();
 
   updateWeather(dt);
   updateSky(dt);
   updateRain(dt);
-  updateTigers(dt);   /* after updateSky so dayFactor is fresh this frame */
-  updateGulls(dt);
+  updateAnimals(dt, 'late');    /* M12: tigers then gulls, after updateSky so dayFactor is fresh */
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   updateCamera();

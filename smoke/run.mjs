@@ -1161,6 +1161,54 @@ patched += `
   // leave a clean state (M11)
   setWeatherDebug('clear');
   stats.wet = 0;
+
+  /* ---- M12: animal framework (registry + shared behaviour helpers) ---- */
+  {
+    // 1. the shared framework helpers exist
+    if (typeof registerAnimal !== 'function' || typeof homeWander !== 'function' ||
+        typeof returnHome !== 'function' || typeof faceHome !== 'function' ||
+        typeof applyMove !== 'function' || typeof panicWildlife !== 'function' ||
+        typeof updateAnimals !== 'function')
+      throw new Error('M12: missing animal framework helper');
+
+    // 2. registry: exactly the 4 reference species in frame() order, bound to
+    //    the canonical arrays with the unchanged pre-M12 populations
+    if (animals.length !== 4) throw new Error('M12: expected 4 registered species, got ' + animals.length);
+    const want = [['fish', schools, 5, 'early'], ['crab', crabs, 9, 'early'],
+                  ['tiger', tigers, 3, 'late'], ['gull', gulls, 5, 'late']];
+    want.forEach(([id, pop, n, phase], i) => {
+      const sp = animals[i];
+      if (!sp || sp.id !== id) throw new Error('M12: registry slot ' + i + ' is ' + (sp && sp.id) + ', want ' + id);
+      if (sp.pop !== pop) throw new Error('M12: ' + id + ' not bound to the canonical array');
+      if (sp.pop.length !== n) throw new Error('M12: ' + id + ' population ' + sp.pop.length + ' != ' + n);
+      if (sp.phase !== phase) throw new Error('M12: ' + id + ' phase ' + sp.phase + ' != ' + phase);
+      if (typeof sp.step !== 'function') throw new Error('M12: ' + id + ' has no step hook');
+    });
+
+    // 3. panicWildlife reproduces the M11 lightning effects exactly
+    const c0 = crabs.find((c) => c.alive);
+    if (!c0) throw new Error('M12: no living crab for the panic test');
+    const savedPanic = tigers.map((t) => t.panicT), savedFlee = c0.fleeT, savedGP = gullPanicT;
+    panicWildlife(c0.x, c0.z);
+    for (const t of tigers)
+      if (t.panicT !== 6 || t.panicX !== c0.x || t.panicZ !== c0.z)
+        throw new Error('M12: panicWildlife did not panic a tiger');
+    if (gullPanicT !== 5) throw new Error('M12: panicWildlife did not quiet the gulls: ' + gullPanicT);
+    if (c0.fleeT !== 3) throw new Error('M12: panicWildlife did not startle the crab: ' + c0.fleeT);
+    tigers.forEach((t, i) => { t.panicT = savedPanic[i]; t.panicX = 0; t.panicZ = 0; });
+    c0.fleeT = savedFlee;
+    gullPanicT = savedGP;
+
+    // 4. updateAnimals drives the phase step hooks (one guarded tick, FSMs frozen)
+    const wasDead = dead;
+    dead = true;
+    updateAnimals(0.016, 'early');
+    updateAnimals(0.016, 'late');
+    dead = wasDead;
+  }
+
+  // leave a clean state (M12)
+  setWeatherDebug('clear');
 }
 `;
 const file = join(here, '.game-smoke.mjs');
