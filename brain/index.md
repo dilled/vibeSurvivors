@@ -1,9 +1,10 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-17T19:11:35.041Z._
+_Auto-generated. Last updated 2026-10-17T19:41:44.938Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
+- [m10-weather-framework](pages/m10-weather-framework.md) — category: decision | tags: [weather, rain, fire, plants, schedule, determinism] | ## What shipped (M10 ‒ weather framework: clear/cloudy/rain)
 - [m2-camp-system](pages/m2-camp-system.md) — category: decision | tags: [camp, building, shelter, bed, respawn] | ## What shipped (M2 — camp build spot + simple structure placement)
 - [m3-camp-fence-light](pages/m3-camp-fence-light.md) — category: decision | tags: [camp, fence, torch, light] | ## What shipped (M3 — fence + camp light/fire integration)
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)

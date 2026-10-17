@@ -583,15 +583,18 @@ for (const p of plants) emitPlant(p);
 /* growth: growing -> ready (regrowDays), ready -> (harvest charges) ->
    depleted -> long regrow (regrowDays) -> growing (charges reset). */
 let plantClock = 0;
-function plantGrowthMult() { return 1; }  /* M10 weather hook: rain will accelerate growth */
+/* M10 weather hook: rain accelerates growth; range average over the window
+   so sleep jumps / T skips stay consistent (see rainFrac). */
+function plantGrowthMult(minA, minB) { return 1 + (RAIN_GROWTH - 1) * rainFrac(minA, minB); }
 /* M9: harvest wear ‒ each full depletion slows the next regrow (state-only,
    deterministic; never touches the spawn rng). */
 const PLANT_WEAR_STEP = 0.5, PLANT_WEAR_MAX = 3;
 function updatePlants() {
   const dMin = gameMin - plantClock;
   if (dMin <= 0) { plantClock = gameMin; return; }
+  const prev = plantClock;
   plantClock = gameMin;
-  const m = plantGrowthMult();
+  const m = plantGrowthMult(prev, gameMin);
   for (const p of plants) {
     if (p.state === 'ready') continue;
     let need = PLANT_TYPES[p.type].regrowDays * 1440 * (p.wear || 1);
@@ -1866,6 +1869,124 @@ function updateItems(dt) {
   }
 }
 
+/* ---------------- weather (M10: clear / cloudy / rain) ---------------- */
+/* The weather schedule is a pure function of elapsed game minutes, not of
+   clock position: a seeded, lazily-extended segment list. It survives
+   setClockP/?t= (which only touch p0), T-key skips, actSleep jumps, and
+   rewinds. M11 appends 'storm' to WEATHER_STATES + WEATHER_NEXT. */
+const WEATHER_SEED_OFFSET = 271;   /* private stream; world uses SEED, plants 101..1193 */
+const WEATHER_STATES = ['clear', 'cloudy', 'rain'];
+const WEATHER_DUR = { clear: [240, 720], cloudy: [120, 360], rain: [60, 180] };
+const WEATHER_NEXT = {   /* [state, weight] transition table (data-driven) */
+  clear:  [['cloudy', 0.7], ['clear', 0.3]],
+  cloudy: [['rain', 0.5], ['clear', 0.4], ['cloudy', 0.1]],
+  rain:   [['cloudy', 0.7], ['clear', 0.3]],
+};
+const RAIN_GROWTH = 1.5;        /* rain accelerates plant growth (M7 hook) */
+const SHELTER_PROTECT_R = 2.0;  /* fires this close to the shelter survive rain */
+const WEATHER_SKY_CLOUDY = new THREE.Color(0x8d99a6);
+const WEATHER_SKY_RAIN = new THREE.Color(0x5f6b7a);
+let weatherRng = mulberry32(SEED + WEATHER_SEED_OFFSET);
+const weather = { segs: [], forced: null, lastState: 'clear', lastMin: 0,
+                  vis: { cloudy: 0, rain: 0 } };
+function weatherDur(state) {
+  const [mn, mx] = WEATHER_DUR[state];
+  return mn + weatherRng() * (mx - mn);
+}
+function weatherPick(prev) {
+  const opts = WEATHER_NEXT[prev];
+  const r = weatherRng();
+  let acc = 0;
+  for (const [st, w] of opts) { acc += w; if (r < acc) return st; }
+  return opts[opts.length - 1][0];
+}
+weather.segs.push({ state: 'clear', start: 0, end: weatherDur('clear') });
+function weatherExtend(min) {   /* lazy: one-time cost even for huge jumps */
+  while (weather.segs[weather.segs.length - 1].end <= min) {
+    const last = weather.segs[weather.segs.length - 1];
+    const st = weatherPick(last.state);
+    weather.segs.push({ state: st, start: last.end, end: last.end + weatherDur(st) });
+  }
+}
+function weatherStateAt(min) {  /* pure lookup: rewinds are harmless */
+  weatherExtend(min);
+  let i = weather.segs.length - 1;
+  while (weather.segs[i].start > min) i--;
+  return weather.segs[i].state;
+}
+function rainFrac(minA, minB) { /* fraction of [minA,minB] spent in rain */
+  if (minB <= minA) return 0;
+  weatherExtend(minB);
+  let total = 0, i = weather.segs.length - 1;
+  while (i >= 0 && weather.segs[i].start < minB) {
+    const s = weather.segs[i];
+    if (s.end <= minA) break;
+    if (s.state === 'rain') total += Math.min(s.end, minB) - Math.max(s.start, minA);
+    i--;
+  }
+  return total / (minB - minA);
+}
+function setWeatherDebug(state) {   /* ?weather= + smoke only; never rewrites segs */
+  weather.forced = state;
+}
+function douseUnshelteredFires() {
+  const S = camp && camp.structures.shelter ? camp.structures.shelter.position : null;
+  let n = 0;
+  for (let i = fires.length - 1; i >= 0; i--) {
+    const f = fires[i];
+    if (S && Math.hypot(f.x - S.x, f.z - S.z) < SHELTER_PROTECT_R) continue;
+    /* the cooking item stays raw in the inventory: actUse only consumes it
+       when the cook completes, so dousing loses only the cook, never the item */
+    scene.remove(f.grp);
+    fires.splice(i, 1);
+    n++;
+  }
+  if (n) toast('\u{1F327} the rain doused your fire' + (n > 1 ? 's' : ''));
+}
+function updateWeather(dt) {
+  const st = weather.forced || weatherStateAt(gameMin);
+  const k = Math.min(1, dt * 3);   /* ~1 s visual blend */
+  weather.vis.rain += ((st === 'rain' ? 1 : 0) - weather.vis.rain) * k;
+  weather.vis.cloudy += ((st === 'cloudy' ? 1 : 0) - weather.vis.cloudy) * k;
+  if (st !== weather.lastState) {
+    if (st === 'clear') toast('\u2600 the sky clears');
+    else if (st === 'cloudy') toast('\u2601 clouds roll in');
+    else {
+      toast('\u{1F327} it starts to rain');
+      learn('weather', 'rain douses fires unless a shelter shields them \u2014 and the jungle grows faster in the rain');
+    }
+  }
+  if (st === 'rain') douseUnshelteredFires();   /* idempotent per frame */
+  weather.lastState = st;
+  weather.lastMin = gameMin;
+}
+/* rain streaks: rig-attached group of falling boxes (stub-safe: no Points) */
+const rainGrp = new THREE.Group();
+rainGrp.visible = false;
+scene.add(rainGrp);
+const rainDrops = [];
+{
+  const dropRng = mulberry32(SEED + 4242);
+  const dropGeo = new THREE.BoxGeometry(0.02, 0.5, 0.02);
+  const dropMat = new THREE.MeshBasicMaterial({ color: 0xa8c8dc, transparent: true, opacity: 0.5 });
+  for (let i = 0; i < 90; i++) {
+    const d = { x: (dropRng() * 2 - 1) * 7, z: (dropRng() * 2 - 1) * 7, y: dropRng() * 9 };
+    const m = new THREE.Mesh(dropGeo, dropMat);
+    m.position.set(d.x, d.y, d.z);
+    rainGrp.add(m);
+    rainDrops.push({ x: d.x, z: d.z, y: d.y, mesh: m });
+  }
+}
+function updateRain(dt) {
+  if (weather.vis.rain <= 0.5) { rainGrp.visible = false; return; }
+  rainGrp.visible = true;
+  for (const d of rainDrops) {
+    d.y -= 14 * dt;
+    if (d.y < 0.3) d.y += 9;
+    d.mesh.position.set(rig.position.x + d.x, rig.position.y + d.y, rig.position.z + d.z);
+  }
+}
+
 /* ---------------- day / night ---------------- */
 
 /* p in [0,1): [0, 2/3) is day 06:00->18:00, [2/3,1) is night 18:00->06:00
@@ -1876,6 +1997,8 @@ let p0 = 0.1;      /* start ~08:00 */
 { /* dev params: ?t=0..1 time of day, ?start=1 skip the title overlay */
   const __q = new URLSearchParams(location.search);
   if (['t'].some((k) => __q.has(k))) p0 = Math.min(0.999, Math.max(0, parseFloat(__q.get('t')) || 0));
+  const __w = __q.get('weather');
+  if (__w === 'clear' || __w === 'cloudy' || __w === 'rain') setWeatherDebug(__w);
   if (__q.has('start')) {
     started = true;
     overlay.style.display = 'none';
@@ -1916,9 +2039,15 @@ function updateSky(dt) {
   const duskK = p < DAY_FRAC ? Math.max(0, 1 - Math.abs(el) / 0.3) * 0.45 : 0;
   tmpCol.lerp(SKY_DUSK, duskK);
   skyColor.copy(tmpCol);
+  /* M10 weather: clouds/rain blend the sky, dim the sun, close the fog */
+  const sunDim = Math.max(0, 1 - 0.5 * weather.vis.cloudy - 0.6 * weather.vis.rain);
+  sun.intensity *= sunDim;
+  tmpCol.copy(skyColor).lerp(WEATHER_SKY_CLOUDY, 0.45 * weather.vis.cloudy);
+  tmpCol.lerp(WEATHER_SKY_RAIN, 0.7 * weather.vis.rain);
+  skyColor.copy(tmpCol);
   scene.fog.color = skyColor;
-  scene.fog.near = 100; scene.fog.far = 520;
-  hemi.intensity = 0.18 + 0.62 * dayFactor;
+  scene.fog.near = 100; scene.fog.far = 520 - 200 * weather.vis.rain;
+  hemi.intensity = (0.18 + 0.62 * dayFactor) * Math.max(0, 1 - 0.3 * weather.vis.cloudy - 0.45 * weather.vis.rain);
   /* HUD clock */
   const hc = clockFromP((p0 + gameMin / 1800) % 1);
   const hh = Math.floor(hc), mm = Math.floor((hc - hh) * 60);
@@ -1928,7 +2057,9 @@ function updateSky(dt) {
     ? 'camp \u2014 ' + (['fence', 'shelter', 'bed', 'torch'].filter((t) => camp.structures[t]).join(' \u00B7 ') || 'empty ground')
       + (campIsLit() ? ' \u00B7 \u{1F525}lit' : '')
     : 'no camp \u2014 H on flat dry land';
-  const hp = `⏱ ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  [${phase}]\n` +
+  const wst = weather.forced || weatherStateAt(gameMin);
+  const wGlyph = wst === 'clear' ? '\u2600' : wst === 'cloudy' ? '\u2601' : '\u{1F327}';
+  const hp = `⏱ ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  [${phase}]   ${wGlyph} ${wst}\n` +
             `🌿 ${zoneAt(heightAt(rig.position.x, rig.position.z))}   ·   ${fps | 0} fps\n` +
             `💧 ${bar(stats.thirst)} ${String(stats.thirst | 0).padStart(3, ' ')}\n` +
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
@@ -2016,7 +2147,9 @@ function frame(t) {
   updateCrabs(dt);
   hintEl.textContent = contextHint();
 
+  updateWeather(dt);
   updateSky(dt);
+  updateRain(dt);
   updateTigers(dt);   /* after updateSky so dayFactor is fresh this frame */
   updateGulls(dt);
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */

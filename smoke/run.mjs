@@ -49,6 +49,7 @@ patched += `
   const pump = (n) => { for (let i = 0; i < n; i++) { const cb = __rafCb; __rafCb = null; __tt += 16.7; if (cb) cb(__tt); } };
   firstNight = true;   // M6: suppress the scripted beat; its dedicated M6 block re-arms it
   pump(5); // one clean frame before asserting
+  setWeatherDebug('clear');   // M10: pin weather so pre-M10 blocks stay dry (schedule tested in the M10 block)
 
   // deterministic island: center is land, edges are sea
   if (heightAt(0, 0) < 2) throw new Error('island center not land: ' + heightAt(0, 0));
@@ -857,6 +858,97 @@ patched += `
   if (dead) throw new Error('respawn (M9) failed');
   if (INV.herb !== 0) throw new Error('respawn should drop herbs');
   if (infectedWound) throw new Error('respawn should clear the festering wound');
+
+  /* ---- M10: weather framework (clear/cloudy/rain) ---- */
+
+  // schedule determinism: replay the lazy generation on a fresh private stream
+  if (weather.segs.length < 4) throw new Error('weather schedule should be extended by now: ' + weather.segs.length);
+  {
+    const wr = mulberry32(SEED + WEATHER_SEED_OFFSET);
+    const rdur = (s) => { const d = WEATHER_DUR[s]; return d[0] + wr() * (d[1] - d[0]); };
+    const rep = [{ state: 'clear', end: rdur('clear') }];
+    let prev = 'clear';
+    for (let i = 0; i < 3; i++) {
+      const opts = WEATHER_NEXT[prev];
+      const r = wr(); let acc = 0, st = opts[opts.length - 1][0];
+      for (const o of opts) { acc += o[1]; if (r < acc) { st = o[0]; break; } }
+      rep.push({ state: st, end: rep[i].end + rdur(st) });
+      prev = st;
+    }
+    for (let i = 0; i < rep.length; i++) {
+      if (weather.segs[i].state !== rep[i].state)
+        throw new Error('weather seg ' + i + ' state mismatch: ' + weather.segs[i].state + ' vs ' + rep[i].state);
+      if (Math.abs(weather.segs[i].end - rep[i].end) > 1e-9)
+        throw new Error('weather seg ' + i + ' end mismatch: ' + weather.segs[i].end + ' vs ' + rep[i].end);
+    }
+    if (weather.segs[0].state !== 'clear') throw new Error('schedule must start clear');
+    if (weatherStateAt(0) !== 'clear') throw new Error('weather at t=0 must be clear');
+  }
+
+  // rain integration: 5 game days contains rain; growth is the rain-weighted range average
+  const rf = rainFrac(0, 7200);
+  if (!(rf > 0 && rf < 1)) throw new Error('5 game days should contain some (not all) rain: ' + rf);
+  if (Math.abs(plantGrowthMult(0, 7200) - (1 + (RAIN_GROWTH - 1) * rf)) > 1e-9)
+    throw new Error('plantGrowthMult should be the rain-weighted range average');
+  if (rainFrac(10, 5) !== 0) throw new Error('inverted window must be dry');
+
+  // visible transitions at noon: sun, fog, streaks, HUD
+  setClockP(0.33); pump(2);
+  const baseSun = sun.intensity;
+  if (baseSun <= 0) throw new Error('need a daytime sun baseline: ' + baseSun);
+  setWeatherDebug('cloudy'); pump(60);
+  if (sun.intensity >= baseSun * 0.85) throw new Error('clouds should dim the sun: ' + sun.intensity);
+  if (rainGrp.visible !== false) throw new Error('no rain streaks when only cloudy');
+  if (scene.fog.far < 500) throw new Error('cloudy fog should stay far: ' + scene.fog.far);
+  setWeatherDebug('rain'); pump(60);
+  if (rainGrp.visible !== true) throw new Error('rain streaks should be visible');
+  if (scene.fog.far >= 400) throw new Error('rain fog should close in: ' + scene.fog.far);
+  if (sun.intensity >= baseSun * 0.6) throw new Error('rain should dim the sun hard: ' + sun.intensity);
+  if (!hudText.includes('rain')) throw new Error('HUD should name the weather: ' + hudText);
+  setWeatherDebug('clear'); pump(60);
+  if (rainGrp.visible !== false) throw new Error('streaks should stop when clear');
+  if (scene.fog.far < 500) throw new Error('fog should open up when clear: ' + scene.fog.far);
+  if (!hudText.includes('clear')) throw new Error('HUD should show clear weather');
+
+  // rain douses unsheltered fires; a fire under the shelter survives
+  const gSp = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
+  rig.position.set(spawn.x, gSp, spawn.z);
+  const nF = fires.length;
+  if (nF >= 5) throw new Error('unexpected fire count before M10: ' + nF);
+  actFire();
+  if (fires.length !== nF + 1) throw new Error('open fire should light');
+  setWeatherDebug('rain'); pump(2);
+  if (fires.length !== 0) throw new Error('rain should douse every unsheltered fire: ' + fires.length);
+  if (!learned.has('weather')) throw new Error('first rain should teach the weather rule');
+  const shel = camp.structures.shelter;
+  if (!shel) throw new Error('shelter should exist from M2');
+  rig.position.set(shel.position.x, Math.max(heightAt(shel.position.x, shel.position.z), WATER - 0.25), shel.position.z);
+  actFire();
+  if (fires.length !== 1) throw new Error('shelter fire should light: ' + fires.length);
+  const shFire = fires[0];
+  pump(2);
+  if (!fires.includes(shFire)) throw new Error('fire under the shelter should survive rain');
+  if (!campIsLit()) throw new Error('camp should stay lit by the shelter fire');
+
+  // doused cook returns its raw item (no item loss)
+  setWeatherDebug('clear'); pump(2);
+  rig.position.set(spawn.x, gSp, spawn.z);
+  actFire();
+  const openF = fires[fires.length - 1];
+  if (Math.hypot(shel.position.x - spawn.x, shel.position.z - spawn.z) < 2.5)
+    throw new Error('smoke camp too close to spawn for the cook test');
+  INV.fishRaw = 1;
+  actUse();
+  if (!openF.cooking || openF.cooking.item !== 'fishRaw')
+    throw new Error('fish cook should start on the open fire');
+  setWeatherDebug('rain'); pump(2);
+  if (fires.includes(openF)) throw new Error('open fire should be doused');
+  if (INV.fishRaw !== 1) throw new Error('doused cook should return the raw item: ' + INV.fishRaw);
+  if (fires.length !== 1 || !fires.includes(shFire))
+    throw new Error('shelter fire should be the only fire left');
+
+  // leave a clean state
+  setWeatherDebug('clear'); pump(2);
 }
 `;
 const file = join(here, '.game-smoke.mjs');
