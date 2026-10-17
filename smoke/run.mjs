@@ -1171,9 +1171,11 @@ patched += `
         typeof updateAnimals !== 'function')
       throw new Error('M12: missing animal framework helper');
 
-    // 2. registry: exactly the 4 reference species in frame() order, bound to
-    //    the canonical arrays with the unchanged pre-M12 populations
-    if (animals.length !== 4) throw new Error('M12: expected 4 registered species, got ' + animals.length);
+    // 2. registry: slots 0-3 are exactly the 4 reference species in frame()
+    //    order, bound to the canonical arrays with the unchanged pre-M12
+    //    populations. M13 registers 3 more (slots 4-6, asserted in the M13
+    //    block) so the total is 7.
+    if (animals.length !== 7) throw new Error('M12: expected 7 registered species (4 reference + 3 M13), got ' + animals.length);
     const want = [['fish', schools, 5, 'early'], ['crab', crabs, 9, 'early'],
                   ['tiger', tigers, 3, 'late'], ['gull', gulls, 5, 'late']];
     want.forEach(([id, pop, n, phase], i) => {
@@ -1209,6 +1211,179 @@ patched += `
 
   // leave a clean state (M12)
   setWeatherDebug('clear');
+
+  /* ---- M13: land wildlife (monkeys + large lizards + snakes) ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
+
+    // 1. registry: the three M13 species after the gulls, 'late', canonical arrays
+    if (animals.length !== 7) throw new Error('M13: expected 7 registered species, got ' + animals.length);
+    const want = [['monkey', monkeys, 5], ['lizard', lizards, 4], ['snake', snakes, 6]];
+    want.forEach(([id, pop, n], j) => {
+      const sp = animals[4 + j];
+      if (!sp || sp.id !== id) throw new Error('M13: registry slot ' + (4 + j) + ' is ' + (sp && sp.id) + ', want ' + id);
+      if (sp.pop !== pop) throw new Error('M13: ' + id + ' not bound to the canonical array');
+      if (sp.pop.length !== n) throw new Error('M13: ' + id + ' population ' + sp.pop.length + ' != ' + n);
+      if (sp.phase !== 'late') throw new Error('M13: ' + id + ' phase ' + sp.phase + ' != late');
+      if (typeof sp.step !== 'function') throw new Error('M13: ' + id + ' has no step hook');
+    });
+    /* spawn bands on the home points (the units drift, the homes are seeded) */
+    if (monkeys.some((m) => heightAt(m.hx, m.hz) < 3 || heightAt(m.hx, m.hz) > 7)) throw new Error('M13: monkey home outside the 3..7 band');
+    if (lizards.some((l) => heightAt(l.hx, l.hz) < 0.6 || heightAt(l.hx, l.hz) > 7)) throw new Error('M13: lizard home outside the 0.6..7 band');
+    if (snakes.some((s) => heightAt(s.hx, s.hz) < 7 || heightAt(s.hx, s.hz) > 20)) throw new Error('M13: snake home outside the 7..20 band');
+    if (!snakes[0].venom || snakes[1].venom || !snakes[2].venom || snakes[3].venom)
+      throw new Error('M13: snake variant split not the deterministic even-odd pattern');
+
+    // 2. monkey steal (day): one carried meat item, per-monkey cooldown + learn
+    pAt(0.33); pump(2);
+    {
+      const m0 = monkeys[0];
+      if (tigers.some((t) => Math.hypot(t.x - m0.hx, t.z - m0.hz) < MONKEY_SCARE_R))
+        throw new Error('M13: setup - a tiger is near the monkey home, steal test contaminated');
+      const saved = {};
+      for (const k of MONKEY_FOOD_ORDER) { saved[k] = INV[k]; INV[k] = 0; }
+      saved.coconut = INV.coconut; INV.coconut = 0;
+      INV.crabCooked = 1;
+      const sCd = m0.stealCd, sSc = m0.scareT;
+      m0.stealCd = 0; m0.scareT = 0;
+      park(m0.x, m0.z);
+      pump(4);
+      if (INV.crabCooked !== 0) throw new Error('M13: the monkey should have snatched the carried meat: ' + INV.crabCooked);
+      if (m0.stealCd <= 0) throw new Error('M13: monkey steal should set the per-monkey cooldown');
+      if (!learned.has('monkey')) throw new Error('M13: monkey steal should teach the tell');
+      for (const k of MONKEY_FOOD_ORDER) INV[k] = saved[k];
+      INV.coconut = saved.coconut;
+      m0.stealCd = sCd; m0.scareT = sSc;
+    }
+
+    // 3. monkey shriek (dawn): a live tiger near the monkey home freezes it
+    pAt(0.008); pump(2);
+    {
+      const m0 = monkeys[1];
+      park(camp.x, camp.z);   // 60u+ from every tiger home, and 150u+ from the tiger at m1's home
+      const t0 = tigers[0];
+      const sT = { x: t0.x, z: t0.z, state: t0.state, panicT: t0.panicT };
+      const sS = m0.screamT, sSc = m0.scareT;
+      m0.screamT = 0; m0.scareT = 0;   // a stale M11 lightning scare would mask the shriek branch
+      t0.x = m0.hx + 3; t0.z = m0.hz; t0.state = 'patrol';
+      pump(3);
+      if (!(m0.screamT > 0 || learned.has('monkeyscream')))
+        throw new Error('M13: dawn monkey should shriek with a tiger near its home');
+      m0.screamT = sS; m0.scareT = sSc;
+      t0.x = sT.x; t0.z = sT.z; t0.state = sT.state; t0.panicT = sT.panicT;
+      park(camp.x, camp.z);
+    }
+
+    // 4. lizard crab hunt (day): the burst takes a living crab from the tide line
+    pAt(0.33); pump(2);
+    {
+      park(camp.x, camp.z);   // safe from the (dusk) tigers; the hunted crab is picked 8u+ away
+      const c0 = crabs.find((c) => c.alive && Math.hypot(c.x - camp.x, c.z - camp.z) > 8);
+      if (!c0) throw new Error('M13: no living crab 8u+ from the camp for the hunt test');
+      const l0 = lizards[0];
+      const sL = { x: l0.x, z: l0.z, burstT: l0.burstT, burstCd: l0.burstCd, fleeT: l0.fleeT, scareT: l0.scareT };
+      l0.x = c0.x; l0.z = c0.z; l0.burstT = 0; l0.burstCd = 0; l0.fleeT = 0; l0.scareT = 0;
+      pump(3);
+      if (c0.alive !== false) throw new Error('M13: the lizard should have caught the crab under it');
+      if (c0.grp.visible !== false) throw new Error('M13: the eaten crab should be hidden');
+      if (!learned.has('lizardcrab')) throw new Error('M13: the crab hunt should teach the tide-line tell');
+      c0.alive = true; c0.grp.visible = true;   // restore
+      l0.x = sL.x; l0.z = sL.z; l0.burstT = sL.burstT; l0.burstCd = sL.burstCd;
+      l0.fleeT = sL.fleeT; l0.scareT = sL.scareT;
+    }
+
+    // 5. lizard dusk camp raid: unfortified camp loses one meat; fence+fire keep it out
+    pAt(0.657); pump(2);
+    {
+      if (!(dayFactor >= 0.25 && dayFactor < 0.5))
+        throw new Error('M13: dusk clock setup failed, dayFactor ' + dayFactor);
+      const l0 = lizards[0];
+      const sL = { x: l0.x, z: l0.z, raidCd: l0.raidCd, burstCd: l0.burstCd, burstT: l0.burstT,
+                  fleeT: l0.fleeT, scareT: l0.scareT, dir: l0.dir, phase: l0.phase };
+      const fFence = camp.structures.fence, fTorch = camp.structures.torch;
+      const savedMeat = {};
+      for (const k of LIZ_MEAT_ORDER) { savedMeat[k] = INV[k]; INV[k] = 0; }
+      INV.crabCooked = 2;
+      const savedSteal = monkeys.map((m) => m.stealCd);   // keep the monkeys from sniping too
+      monkeys.forEach((m) => { m.stealCd = MONKEY_STEAL_CD; m.scareT = 0; });
+      camp.structures.fence = null; camp.structures.torch = null;   // unfortified
+      park(camp.x + 9, camp.z);                       // player inside the raid range
+      l0.x = camp.x - 5; l0.z = camp.z;               // lizard approaches from the far side
+      l0.raidCd = 0; l0.burstCd = 8; l0.burstT = 0; l0.fleeT = 0; l0.scareT = 0;   // burst CD keeps the crab hunt quiet
+      pump(150);   // ~2.5 s: the 5u approach at 3.5u/s finishes well inside
+      if (INV.crabCooked !== 1)
+        throw new Error('M13: the lizard should have sniped exactly one meat at the unfortified camp: ' + INV.crabCooked);
+      if (!learned.has('lizard')) throw new Error('M13: the camp raid should teach the tell');
+      // now fortified: fence AND fire keep the lizard outside the perimeter
+      camp.structures.fence = fFence; camp.structures.torch = fTorch;
+      l0.raidCd = 0; l0.x = camp.x - 5; l0.z = camp.z; l0.fleeT = 0; l0.scareT = 0;
+      pump(150);
+      if (INV.crabCooked !== 1)
+        throw new Error('M13: fence and fire should keep the lizard from the camp: ' + INV.crabCooked);
+      if (!learned.has('lizardfence')) throw new Error('M13: the held perimeter should teach the fence+fire tell');
+      camp.structures.fence = fFence; camp.structures.torch = fTorch;
+      monkeys.forEach((m, i) => { m.stealCd = savedSteal[i]; });
+      for (const k of LIZ_MEAT_ORDER) INV[k] = savedMeat[k];
+      l0.x = sL.x; l0.z = sL.z; l0.raidCd = sL.raidCd; l0.burstCd = sL.burstCd; l0.burstT = sL.burstT;
+      l0.fleeT = sL.fleeT; l0.scareT = sL.scareT; l0.dir = sL.dir; l0.phase = sL.phase;
+    }
+
+    // 6. snakes: venomous strike drops health (health, not death), harmless spits
+    pAt(0.33); pump(2);
+    {
+      park(camp.x, camp.z);
+      const sThirst = stats.thirst;
+      stats.thirst = 10;   // above the drain threshold, below the regen threshold: health stays put except the strike
+      const sInf = infectedWound;
+      infectedWound = false;   // an earlier night's tiger wound must not bleed into the exact-damage asserts
+      stats.health = 100;
+      const s0 = snakes[0];
+      const sA = { strikeCd: s0.strikeCd, tellT: s0.tellT, fleeT: s0.fleeT, freezeT: s0.freezeT };
+      s0.strikeCd = 0; s0.tellT = 0; s0.fleeT = 0; s0.freezeT = 0;
+      park(s0.x, s0.z);   // stepped on it
+      pump(80);           // ~1.3 s > the 0.8 s telegraph
+      if (stats.health !== 100 - SNAKE_VENOM_DMG)
+        throw new Error('M13: the venom strike should deal SNAKE_VENOM_DMG: ' + stats.health);
+      if (dead) throw new Error('M13: a single snake strike must not kill a full-health player');
+      if (!learned.has('snakevenom')) throw new Error('M13: the venom strike should teach the tell');
+      stats.health = 100;
+      const s1 = snakes[1];
+      const sB = { strikeCd: s1.strikeCd, tellT: s1.tellT, fleeT: s1.fleeT, freezeT: s1.freezeT };
+      s1.strikeCd = 0; s1.tellT = 0; s1.fleeT = 0; s1.freezeT = 0;
+      park(s1.x, s1.z);
+      pump(80);
+      if (stats.health !== 100) throw new Error('M13: the harmless snake should not damage: ' + stats.health);
+      if (!learned.has('snakeharmless')) throw new Error('M13: the harmless snake should teach the tell');
+      s0.strikeCd = sA.strikeCd; s0.tellT = sA.tellT; s0.fleeT = sA.fleeT; s0.freezeT = sA.freezeT;
+      s1.strikeCd = sB.strikeCd; s1.tellT = sB.tellT; s1.fleeT = sB.fleeT; s1.freezeT = sB.freezeT;
+      stats.health = 100;
+      stats.thirst = sThirst;
+      infectedWound = sInf;
+      park(camp.x, camp.z);
+    }
+
+    // 7. panicWildlife startles the new species (M12 exact values untouched)
+    {
+      const m0 = monkeys[0], l0 = lizards[0], s0 = snakes[0];
+      const sM = m0.scareT, sL = l0.scareT, sS = s0.freezeT;
+      const sT = tigers.map((t) => t.panicT), sG = gullPanicT;
+      panicWildlife(m0.x, m0.z);
+      if (!(m0.scareT > 0)) throw new Error('M13: panicWildlife should startle the monkey');
+      if (!(l0.scareT > 0)) throw new Error('M13: panicWildlife should startle the lizard');
+      if (!(s0.freezeT > 0)) throw new Error('M13: panicWildlife should freeze the snake');
+      m0.scareT = sM; l0.scareT = sL; s0.freezeT = sS;
+      tigers.forEach((t, i) => { t.panicT = sT[i]; });
+      gullPanicT = sG;
+      for (const c of crabs) if (c.alive) c.fleeT = 0;
+    }
+
+    // leave a clean state (M13)
+    park(spawn.x, spawn.z);
+    setWeatherDebug('clear');
+    pAt(0.33);
+    stats.health = 100;
+  }
 }
 `;
 const file = join(here, '.game-smoke.mjs');

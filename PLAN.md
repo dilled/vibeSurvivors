@@ -135,7 +135,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M10** ✅ | Weather framework: clear/cloudy/rain | Weather transitions visibly and affects the island |
 | **M11** ✅ | Storm gameplay + weather/survival interaction | Storm materially changes survival decisions |
 | **M12** ✅ | Remaining animal framework + shared animal state/behaviour foundations | New animal species can be added without bespoke world logic |
-| **M13** | Monkeys + large lizards + snakes | Land wildlife has distinct behaviours |
+| **M13** ✅ | Monkeys + large lizards + snakes | Land wildlife has distinct behaviours |
 | **M14** | Seagulls + pelicans + expanded crabs | Beach/air ecosystem feels active |
 | **M15** | Sharks + expanded fish ecosystem | Water ecosystem creates risk and opportunity |
 | **M16** | Animal alarm bus + cross-species reactions | Animals react meaningfully to nearby threats/events |
