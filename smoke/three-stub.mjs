@@ -12,6 +12,7 @@ export class Vector3 {
   setX(x) { this.x = x; return this; }
   setY(y) { this.y = y; return this; }
   setZ(z) { this.z = z; return this; }
+  setScalar(v) { this.x = this.y = this.z = v; return this; }
   copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
   clone() { return new Vector3(this.x, this.y, this.z); }
   add(v) { this.x += v.x; this.y += v.y; this.z += v.z; return this; }

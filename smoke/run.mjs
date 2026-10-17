@@ -1175,7 +1175,7 @@ patched += `
     //    order, bound to the canonical arrays with the unchanged pre-M12
     //    populations. M13 registers 3 more (slots 4-6, asserted in the M13
     //    block) so the total is 7.
-    if (animals.length !== 8) throw new Error('M12: expected 8 registered species (4 reference + 3 M13 + 1 M14), got ' + animals.length);
+    if (animals.length !== 9) throw new Error('M12: expected 9 registered species (4 reference + 3 M13 + 1 M14 + 1 M15), got ' + animals.length);
     const want = [['fish', schools, 5, 'early'], ['crab', crabs, 15, 'early'],
                   ['tiger', tigers, 3, 'late'], ['gull', gulls, 5, 'late']];
     want.forEach(([id, pop, n, phase], i) => {
@@ -1218,7 +1218,7 @@ patched += `
     const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
 
     // 1. registry: the three M13 species after the gulls, 'late', canonical arrays
-    if (animals.length !== 8) throw new Error('M13: expected 8 registered species, got ' + animals.length);
+    if (animals.length !== 9) throw new Error('M13: expected 9 registered species, got ' + animals.length);
     const want = [['monkey', monkeys, 5], ['lizard', lizards, 4], ['snake', snakes, 6]];
     want.forEach(([id, pop, n], j) => {
       const sp = animals[4 + j];
@@ -1400,7 +1400,7 @@ patched += `
     const monkeySnap = monkeys.map((m) => m.stealCd);
 
     // 1. registry: slot 7 is the pelican (M12/M13 slots untouched); crabs number 15
-    if (animals.length !== 8) throw new Error('M14: expected 8 registered species, got ' + animals.length);
+    if (animals.length !== 9) throw new Error('M14: expected 9 registered species, got ' + animals.length);
     const psp = animals[7];
     if (!psp || psp.id !== 'pelican' || psp.pop !== pelicans || psp.pop.length !== 3 ||
         psp.phase !== 'late' || typeof psp.step !== 'function')
@@ -1565,6 +1565,180 @@ patched += `
       p.dir = pelicanSnap[i].dir;
     });
     monkeys.forEach((m, i) => { m.stealCd = monkeySnap[i]; });
+  }
+
+  /* ---- M15: sharks + expanded fish ecosystem ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
+    const sharkSnap = sharks.map((s) => ({ x: s.x, z: s.z, dir: s.dir, state: s.state,
+                                            tellT: s.tellT, atkCd: s.atkCd, fleeT: s.fleeT,
+                                            fleeX: s.fleeX, fleeZ: s.fleeZ }));
+    const schoolSnap = schools.map((s) => ({ n: s.n, regT: s.regT }));
+    const infSnap = infectedWound;
+    const spearSnap = spear;
+    const fishSnap = INV.fishRaw;
+    const cdSnap = strikeCd;
+    const gullCdSnap = gullDiveCd;
+    const gullTellSnap = gulls.map((g) => g.diveTell);
+    /* freeze gull dive-bombs so a pending tell can't corrupt the exact-health asserts */
+    const stillGulls = () => { gulls.forEach((g) => { g.diveTell = 0; }); gullDiveCd = 999; };
+
+    // 1. registry: slot 8 is the shark ('early', canonical array, pop 2)
+    if (animals.length !== 9) throw new Error('M15: expected 9 registered species, got ' + animals.length);
+    const ssp = animals[8];
+    if (!ssp || ssp.id !== 'shark' || ssp.pop !== sharks || ssp.pop.length !== 2 ||
+        ssp.phase !== 'early' || typeof ssp.step !== 'function')
+      throw new Error('M15: registry slot 8 must be the shark descriptor');
+
+    // 2. spawn invariants: reef band, 40u+ from spawn, 30u+ apart
+    for (const s of sharks) {
+      const h = heightAt(s.hx, s.hz);
+      if (h > -0.6 || h < -2.2) throw new Error('M15: shark home outside the -2.2..-0.6 band: ' + h);
+      if (Math.hypot(s.hx - spawn.x, s.hz - spawn.z) < 40) throw new Error('M15: shark home < 40u from spawn');
+    }
+    if (Math.hypot(sharks[0].hx - sharks[1].hx, sharks[0].hz - sharks[1].hz) < 30)
+      throw new Error('M15: the two shark homes must be 30u+ apart');
+
+    // 3. land immunity: a 2u-away shark cannot hurt a player on the beach
+    pAt(0.33); pump(2);
+    stillGulls();
+    {
+      const landPt = (() => {
+        for (let r = 4; r < ISLAND_R; r += 2)
+          for (let k = 0; k < 16; k++) {
+            const a = k * Math.PI / 8;
+            const x = Math.cos(a) * r, z = Math.sin(a) * r;
+            if (heightAt(x, z) >= SHARK_IN_WATER) return { x, z };
+          }
+        throw new Error('M15: no land point found');
+      })();
+      const s0 = sharks[0];
+      s0.x = landPt.x + 2; s0.z = landPt.z; s0.fleeT = 0; s0.tellT = 0; s0.atkCd = 0; s0.state = 'patrol';
+      sharks[1].atkCd = 999;
+      park(landPt.x, landPt.z);
+      stats.health = 100; stats.thirst = 100; stats.hunger = 100; infectedWound = false;
+      pump(300);   // 5 s: well past the 0.7 s telegraph
+      if (stats.health !== 100) throw new Error('M15: a shark must not hurt a player on land: ' + stats.health);
+    }
+
+    // 4. water attack: a curious shark in the shallows bites exactly once for SHARK_DMG
+    {
+      const s0 = sharks[0];
+      const sx = schools[0];
+      park(sx.bx, sx.bz);   // the school home is shallow water (< 0.5)
+      /* thirst/hunger at 15: below the +0.35/s regen threshold, above the drain threshold */
+      stats.health = 100; stats.thirst = 15; stats.hunger = 15; infectedWound = false;
+      s0.x = sx.bx + 2; s0.z = sx.bz; s0.state = 'curious'; s0.tellT = 0; s0.atkCd = 0; s0.fleeT = 0;
+      sharks[1].atkCd = 999;
+      stillGulls();
+      pump(120);   // 2 s: the 0.7 s lunge runs, then the 8 s cooldown holds
+      if (stats.health !== 100 - SHARK_DMG) throw new Error('M15: the shark bite should take exactly ' + SHARK_DMG + ' hp: ' + stats.health);
+      if (dead) throw new Error('M15: a shark bite must not one-shot a full-health player');
+      if (!learned.has('shark')) throw new Error('M15: the bite should teach the tell');
+    }
+
+    // 5. blood: a festering wound in the water draws the shark from 20u away
+    {
+      const s0 = sharks[1];
+      const sx = schools[1];
+      infectedWound = true;
+      park(sx.bx, sx.bz);
+      s0.x = sx.bx + 20; s0.z = sx.bz; s0.fleeT = 0; s0.tellT = 0; s0.atkCd = SHARK_ATK_CD; s0.state = 'patrol';
+      stillGulls();
+      pump(120);
+      if (s0.state !== 'curious') throw new Error('M15: a bleeding in-water player should draw the shark curious: ' + s0.state);
+      if (!learned.has('blood')) throw new Error('M15: the blood draw should teach the tell');
+      infectedWound = infSnap;
+    }
+
+    // 6. gull scream: a curious shark near the in-water player keeps gullWaterT alive
+    {
+      const s0 = sharks[0];
+      const sx = schools[0];
+      park(sx.bx, sx.bz);
+      s0.x = sx.bx + 6; s0.z = sx.bz; s0.fleeT = 0; s0.atkCd = 999;
+      stillGulls();
+      gullWaterT = 0;
+      pump(60);
+      if (!(gullWaterT > 0)) throw new Error('M15: a curious shark in the water should keep the gull scream alive: ' + gullWaterT);
+    }
+
+    // 7. panicWildlife flees the sharks (M12/M13/M14 effects untouched)
+    {
+      const s0 = sharks[1];
+      const s = { t: s0.fleeT, x: s0.fleeX, z: s0.fleeZ };
+      const sT = tigers.map((t) => ({ panicT: t.panicT, panicX: t.panicX, panicZ: t.panicZ }));
+      const sG = gullPanicT;
+      const sC = crabs.map((c) => c.fleeT);
+      const sM = monkeys.map((m) => m.scareT);
+      const sL = lizards.map((l) => l.scareT);
+      const sS = snakes.map((k) => k.freezeT);
+      const sP = pelicans.map((p) => p.fleeT);
+      panicWildlife(s0.x, s0.z);
+      if (!(s0.fleeT > 0)) throw new Error('M15: panicWildlife should flee the shark');
+      s0.fleeT = s.t; s0.fleeX = s.x; s0.fleeZ = s.z;
+      tigers.forEach((t, i) => { t.panicT = sT[i].panicT; t.panicX = sT[i].panicX; t.panicZ = sT[i].panicZ; });
+      gullPanicT = sG;
+      crabs.forEach((c, i) => { c.fleeT = sC[i]; });
+      monkeys.forEach((m, i) => { m.scareT = sM[i]; });
+      lizards.forEach((l, i) => { l.scareT = sL[i]; });
+      snakes.forEach((k, i) => { k.freezeT = sS[i]; });
+      pelicans.forEach((p, i) => { p.fleeT = sP[i]; });
+    }
+
+    // 8. regeneration: a thinned school grows back at 1/120s, capped at min(n0, 12)
+    {
+      const s0 = schools[0];
+      const cap = Math.min(s0.n0, 12);
+      s0.n = Math.max(0, cap - 1); s0.regT = 119.9;
+      pump(30);   // ~0.5 s: crosses the 120 s boundary exactly once
+      if (s0.n !== cap) throw new Error('M15: the school should regenerate to its cap: ' + s0.n + ' != ' + cap);
+      s0.n = cap; s0.regT = 240;
+      pump(30);
+      if (s0.n !== cap) throw new Error('M15: the school must not grow past min(n0, 12): ' + s0.n);
+    }
+
+    // 9. dawn/dusk double bite: the spear takes two; midday takes one
+    {
+      const s0 = schools[1];
+      const startN = s0.n = Math.max(s0.n, 3);
+      spear = true; strikeCd = 0; infectedWound = false;
+      sharks.forEach((s) => { s.atkCd = 999; });
+      park(s0.bx, s0.bz);
+      pAt(0.658); pump(2);   // the previous-frame dayFactor enters the [0.25, 0.5) band
+      if (dayFactor < 0.25 || dayFactor >= 0.5) throw new Error('M15: the test clock left the dawn/dusk band: ' + dayFactor);
+      const b1 = INV.fishRaw;
+      actStrike();
+      if (INV.fishRaw !== b1 + 2) throw new Error('M15: the dawn/dusk spear should take two fish: ' + INV.fishRaw);
+      if (s0.n !== startN - 2) throw new Error('M15: the school should lose two fish: ' + s0.n);
+      if (!learned.has('bite')) throw new Error('M15: the double bite should teach the tell');
+      pAt(0.33); pump(2);   // back to midday
+      const b2 = INV.fishRaw;
+      strikeCd = 0;
+      actStrike();
+      if (INV.fishRaw !== b2 + 1) throw new Error('M15: a midday spear should take one fish: ' + INV.fishRaw);
+    }
+
+    // leave a clean state (M15)
+    park(spawn.x, spawn.z);
+    setWeatherDebug('clear');
+    pAt(0.33);
+    stats.health = 100;
+    infectedWound = infSnap;
+    spear = spearSnap;
+    strikeCd = cdSnap;
+    INV.fishRaw = fishSnap;
+    gullWaterT = 0;
+    schools.forEach((s, i) => { s.n = schoolSnap[i].n; s.regT = schoolSnap[i].regT; s.mesh.count = s.n; });
+    sharks.forEach((s, i) => {
+      const q = sharkSnap[i];
+      s.x = q.x; s.z = q.z; s.dir = q.dir; s.state = q.state;
+      s.tellT = q.tellT; s.atkCd = q.atkCd; s.fleeT = q.fleeT; s.fleeX = q.fleeX; s.fleeZ = q.fleeZ;
+      s.grp.scale.setScalar(1);
+    });
+    gulls.forEach((g, i) => { g.diveTell = gullTellSnap[i]; });
+    gullDiveCd = gullCdSnap;
   }
 }
 `;

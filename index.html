@@ -842,12 +842,18 @@ const schools = [];
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.count = n;
     scene.add(mesh);
-    schools.push({ x, z, bx: x, bz: z, n, phase: rng() * 100, mesh });
+    schools.push({ x, z, bx: x, bz: z, n, n0: n, regT: 0, phase: rng() * 100, mesh });   /* M15: n0/regT = slow regeneration */
   }
 }
 function updateSchools(dt) {
   for (const s of schools) {
-    if (s.n <= 0) continue;
+    /* M15: the school slowly regrows toward its original size (1 fish / 120 s,
+       capped at min(n0, 12) ‒ the InstancedMesh holds 12 instances). */
+    s.regT += dt;
+    while (s.regT >= 120) {
+      s.regT -= 120;
+      if (s.n < Math.min(s.n0, 12)) { s.n++; s.mesh.count = s.n; }
+    }
     /* wander target, shrunk toward home while it would leave the water */
     let ox = Math.sin(runT * 0.07 + s.phase) * 9;
     let oz = Math.cos(runT * 0.09 + s.phase * 1.7) * 7;
@@ -1351,6 +1357,7 @@ function panicWildlife(x, z) {
   for (const l of lizards) { l.scareT = 3; l.scareX = x; l.scareZ = z; }
   for (const s of snakes) s.freezeT = 1.2;
   for (const p of pelicans) { p.fleeT = 3; p.fleeX = x; p.fleeZ = z; }   /* M14 */
+  for (const s of sharks) { s.fleeT = 3; s.fleeX = x; s.fleeZ = z; }   /* M15 */
 }
 /* M12: run a phase of the animal registry. 'early' species (fish, crabs) run
    before weather/sky on the previous frame's dayFactor; 'late' species
@@ -2021,6 +2028,122 @@ registerAnimal({
   threat: 'deep-dives a fish school (a free fish finder the gulls contest), hovers to steal a raw fish from your hand \u2014 Space keeps it (M14); perches at night',
 });
 
+/* ---- sharks (M15): the apex of the water ecosystem. They patrol the reef
+   (deeper than the fish band), grow curious about a player IN THE WATER,
+   are drawn by the smell of a festering wound's blood, bolder in a storm,
+   and aggressive at dawn/dusk. Never killable ‒ the spear does nothing;
+   the counters are knowledge, timing, and getting out of the water. A
+   curious shark keeps the gull scream (M6 gullWaterT tell) alive. Spawn
+   rng() calls live strictly AFTER the M14 pelican block (determinism ‒
+   keep it that way). ---- */
+const SHARK_SPEED = { patrol: 2.2, curious: 3.4 };
+const SHARK_WANDER = { f1: 0.05, f2: 0.06, rx: 14, rz: 12, homeR: 25, minStep: 1.5, speed: SHARK_SPEED.patrol, still: 0 };
+const SHARK_CURIOUS_R = 12, SHARK_STORM_R = 18, SHARK_BLOOD_R = 30;
+const SHARK_ATTACK_R = 2.4, SHARK_LUNGE_TELL = 0.7, SHARK_DMG = 20, SHARK_ATK_CD = 8;
+const SHARK_IN_WATER = 0.5;   /* player heightAt threshold (same as the gulls' water test) */
+const SHARK_TERRAIN = (x, z) => heightAt(x, z) <= -0.6;   /* never leaves the deep water */
+
+function buildSharkMesh(x, y, z) {
+  const grp = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x47555f });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 2.2), mat);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.16), mat);
+  tail.position.set(0, 0.05, -1.25);
+  const dorsal = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.6, 0.5), mat);
+  dorsal.position.set(0, 0.55, 0.4);
+  grp.add(body, tail, dorsal);
+  grp.position.set(x, y, z);
+  scene.add(grp);
+  return grp;
+}
+
+const sharks = [];
+{
+  let placed = 0;
+  while (sharks.length < 2 && placed < 2000) {
+    placed++;
+    const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 1.12;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const h = heightAt(x, z);
+    if (h > -0.6 || h < -2.2) continue;   /* the reef: deeper than the fish band */
+    if (Math.hypot(x - spawn.x, z - spawn.z) < 40) continue;
+    if (sharks.some((s) => Math.hypot(s.x - x, s.z - z) < 30)) continue;
+    sharks.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2, phase: rng() * 100,
+                  state: 'patrol', tellT: 0, atkCd: 0, fleeT: 0, fleeX: 0, fleeZ: 0,
+                  grp: buildSharkMesh(x, WATER - 0.35, z) });
+  }
+}
+
+function updateSharks(dt) {
+  if (!started || dead) return;
+  const px = rig.position.x, pz = rig.position.z;
+  const inWater = heightAt(px, pz) < SHARK_IN_WATER;
+  const dawnDusk = dayFactor >= 0.25 && dayFactor < 0.5;
+  const curiousR = effectiveWeather() === 'storm' ? SHARK_STORM_R : SHARK_CURIOUS_R;
+  const bloodR = infectedWound && inWater ? SHARK_BLOOD_R : 0;
+  const attackR = SHARK_ATTACK_R + (dawnDusk ? 0.8 : 0);
+  for (const s of sharks) {
+    if (s.atkCd > 0) s.atkCd -= dt;
+    if (s.fleeT > 0) s.fleeT -= dt;
+    const d = Math.hypot(px - s.x, pz - s.z);
+    let dir = s.dir, speed = 0;
+    if (s.fleeT > 0) {
+      /* startled (panicWildlife): off, still in the water */
+      s.state = 'flee';
+      dir = Math.atan2(s.x - s.fleeX, s.z - s.fleeZ);
+      speed = SHARK_SPEED.curious;
+    } else if (inWater && d < bloodR) {
+      /* blood: a festering wound bleeds in the water, the smell carries */
+      s.state = 'curious';
+      dir = Math.atan2(px - s.x, pz - s.z);
+      speed = SHARK_SPEED.curious;
+      if (!learned.has('blood'))
+        learn('blood', 'a festering wound bleeds in the water \u2014 the smell carries');
+    } else if (inWater && d < curiousR) {
+      s.state = 'curious';
+      dir = Math.atan2(px - s.x, pz - s.z);
+      speed = SHARK_SPEED.curious;
+    } else {
+      s.state = 'patrol';
+      const mv = homeWander(s, SHARK_WANDER);   /* M12 */
+      dir = mv.dir; speed = mv.speed;
+    }
+    /* the bite: curious, inside the attack radius, the player still in the
+       water, the cooldown clear. 0.7 s lunge telegraph, then damage. */
+    if (s.state === 'curious' && inWater && s.atkCd <= 0 && d <= attackR) {
+      speed = 0;
+      if (s.tellT <= 0) s.tellT = SHARK_LUNGE_TELL;
+      s.tellT -= dt;
+      s.grp.scale.setScalar(1 + 0.15 * Math.sin(runT * 20));   /* the lurch */
+      if (s.tellT <= 0) {
+        s.grp.scale.setScalar(1);
+        stats.health = Math.max(0, stats.health - SHARK_DMG);
+        checkDeath();
+        s.atkCd = dawnDusk ? SHARK_ATK_CD / 2 : SHARK_ATK_CD;   /* aggressive dawn/dusk */
+        learn('shark', 'sharks circle the reef \u2014 out of the water when one closes on you');
+        toast('\u{1F40B} a shark bites');
+      }
+    } else {
+      s.tellT = 0;
+      s.grp.scale.setScalar(1);
+    }
+    applyMove(s, dir, speed, dt, SHARK_TERRAIN);
+    if (s.state === 'curious') gullWaterT = 8;   /* the gulls scream: something is in the water */
+    s.grp.position.set(s.x, WATER - 0.35, s.z);
+    s.grp.rotation.y = s.dir;
+  }
+}
+
+/* M15: the shark, registry slot 8 (last) ‒ the water 'early' phase, after
+   the M14 pelican (slots 0-7 asserted by the M12-M14 smoke blocks). */
+registerAnimal({
+  id: 'shark', label: 'sharks', pop: sharks, phase: 'early',
+  band: 'water -2.2..-0.6', count: 2, active: () => true,
+  speed: SHARK_SPEED, homeR: 25, terrainOK: SHARK_TERRAIN,
+  step: (dt) => updateSharks(dt),
+  threat: 'never killable, the spear does nothing; curious about a player in the water, drawn by festering-wound blood, bolder in a storm, aggressive at dawn/dusk; the gulls scream while it circles (M15)',
+});
+
 /* ---- the spear (attached to the right arm) ---- */
 const spearMesh = (() => {
   const g = new THREE.Group();
@@ -2345,13 +2468,22 @@ function actStrike() {
     if (d < bd) { bd = d; best = s; }
   }
   if (!best) { toast('no fish here'); return; }
-  best.n--;
+  /* M15: dawn and dusk (0.25 <= dayFactor < 0.5) the schools bunch up ‒
+     the spear takes two instead of one. */
+  const duskBite = dayFactor >= 0.25 && dayFactor < 0.5;
+  const take = duskBite ? 2 : 1;
+  best.n = Math.max(0, best.n - take);
   best.mesh.count = best.n;
-  INV.fishRaw++;
+  INV.fishRaw += take;
   strikeCd = 1.2;
   spearSwing = 0.35;
   learn('fish', 'fish: schools drift in the shallows \u2014 X spears the nearest one');
-  toast('\u{1F41F} you spear a fish');
+  if (duskBite) {
+    learn('bite', 'dawn and dusk: the fish bunch in the shallows \u2014 the spear takes two');
+    toast('\u{1F41F} you spear two fish');
+  } else {
+    toast('\u{1F41F} you spear a fish');
+  }
 }
 function actFire() {
   if (dead) return;

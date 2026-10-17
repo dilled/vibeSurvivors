@@ -137,7 +137,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M12** ✅ | Remaining animal framework + shared animal state/behaviour foundations | New animal species can be added without bespoke world logic |
 | **M13** ✅ | Monkeys + large lizards + snakes | Land wildlife has distinct behaviours |
 | **M14** ✅ | Seagulls + pelicans + expanded crabs | Beach/air ecosystem feels active |
-| **M15** | Sharks + expanded fish ecosystem | Water ecosystem creates risk and opportunity |
+| **M15** ✅ | Sharks + expanded fish ecosystem | Water ecosystem creates risk and opportunity |
 | **M16** | Animal alarm bus + cross-species reactions | Animals react meaningfully to nearby threats/events |
 | **M17** | Animal ecosystem integration + balancing | All 10 species coexist without obvious broken behaviour |
 | **M18** | Paper map system | Player can navigate using an in-world paper map |
