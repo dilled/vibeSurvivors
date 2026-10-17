@@ -131,7 +131,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M6** ✅ | Night-1 encounter: tiger + crabs + gulls + balancing | First scary night; if not tense/fun, stop and fix before continuing |
 | **M7** ✅ | Vegetation framework: deterministic spawning, plant data, growth/state system | Plants exist as a reusable gameplay system |
 | **M8** ✅ | Edible + poisonous plants and vegetables | Foraging requires identification and risk/reward choices |
-| **M9** | Medicinal plants + harvesting/regrowth | Plant resources support survival decisions over time |
+| **M9** ✅ | Medicinal plants + harvesting/regrowth | Plant resources support survival decisions over time |
 | **M10** | Weather framework: clear/cloudy/rain | Weather transitions visibly and affects the island |
 | **M11** | Storm gameplay + weather/survival interaction | Storm materially changes survival decisions |
 | **M12** | Remaining animal framework + shared animal state/behaviour foundations | New animal species can be added without bespoke world logic |

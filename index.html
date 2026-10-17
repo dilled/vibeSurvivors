@@ -460,6 +460,14 @@ const PLANT_TYPES = {
               know: 'you now know: the pale yam burns from the inside' },
     learn: '',
   },
+  /* M9: medicinal herb. NOT food (never enters VEG_EAT_ORDER): M chews one
+     to close a festering tiger wound and restore health. */
+  herb: {
+    seedOffset: 1193, hmin: 1.0, hmax: 9.0, count: 18, minDist: 5,
+    regrowDays: 1.5, charges: 2, kind: 'tuft', color: 0x8fe3b0,
+    drop: { invKey: 'herb', n: 1 },
+    learn: 'healing herb \u2014 pale-green leaves (M chews one on a wound)',
+  },
 };
 
 function spawnSpecies(def) {
@@ -490,7 +498,7 @@ for (const key of Object.keys(PLANT_TYPES)) {
       type: key, x: pts[i].x, z: pts[i].z, h: pts[i].h,
       state: frac < 0.45 ? 'ready' : 'growing',   /* day-1 foraging works */
       min: frac < 0.45 ? 0 : frac * regrowMin,
-      chargesLeft: def.charges, si: i, idx: plants.length,
+      chargesLeft: def.charges, si: i, idx: plants.length, wear: 1,
       s: 0.75 + ((i * 37) % 13) / 25,            /* deterministic size variation */
     });
   }
@@ -576,6 +584,9 @@ for (const p of plants) emitPlant(p);
    depleted -> long regrow (regrowDays) -> growing (charges reset). */
 let plantClock = 0;
 function plantGrowthMult() { return 1; }  /* M10 weather hook: rain will accelerate growth */
+/* M9: harvest wear ‒ each full depletion slows the next regrow (state-only,
+   deterministic; never touches the spawn rng). */
+const PLANT_WEAR_STEP = 0.5, PLANT_WEAR_MAX = 3;
 function updatePlants() {
   const dMin = gameMin - plantClock;
   if (dMin <= 0) { plantClock = gameMin; return; }
@@ -583,12 +594,17 @@ function updatePlants() {
   const m = plantGrowthMult();
   for (const p of plants) {
     if (p.state === 'ready') continue;
-    const need = PLANT_TYPES[p.type].regrowDays * 1440;
+    let need = PLANT_TYPES[p.type].regrowDays * 1440 * (p.wear || 1);
     let rem = p.min + dMin * m;
     let changed = false;
     for (let g = 0; g < 8 && rem >= need; g++) {  /* large dMin: fast-forward, no loop-of-frames */
       rem -= need;
-      if (p.state === 'depleted') { p.state = 'growing'; p.chargesLeft = PLANT_TYPES[p.type].charges; changed = true; }
+      if (p.state === 'depleted') {
+        p.state = 'growing'; p.chargesLeft = PLANT_TYPES[p.type].charges;
+        p.wear = Math.min((p.wear || 1) + PLANT_WEAR_STEP, PLANT_WEAR_MAX);
+        need = PLANT_TYPES[p.type].regrowDays * 1440 * p.wear;   /* slower next cycle */
+        changed = true;
+      }
       else { p.state = 'ready'; rem = 0; changed = true; break; }
     }
     p.min = rem;
@@ -672,6 +688,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') eatFish();
   if (e.code === 'KeyV') eatCrab();
   if (e.code === 'KeyQ') eatGathered();   /* M8: eat foraged food (safe first, poisons last) */
+  if (e.code === 'KeyM') useHerb();        /* M9: chew a healing herb (cures the festering wound) */
   if (e.code === 'KeyG') actFire();
   if (e.code === 'KeyB') actCraftSpear();
   if (e.code === 'KeyX') actStrike();
@@ -689,7 +706,7 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 const stats = { thirst: 100, hunger: 100, health: 100 };
 const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0,
               sweetpotato: 0, sweetpotatoCooked: 0, yam: 0, yamCooked: 0, banana: 0, wildberry: 0,
-              poisonberry: 0, poisonfern: 0, poisonyam: 0 };
+              poisonberry: 0, poisonfern: 0, poisonyam: 0, herb: 0 };
 let dead = false, spear = false;
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
 
@@ -714,6 +731,10 @@ const VEG_EAT_TOAST = {
 };
 let lastMeal = { hunger: 0, thirst: 0 };
 let poisonDrain = null;   /* {rem: real seconds left, rate: hp/s} */
+/* M9: festering tiger wound ‒ persistent real-second bleed until a healing
+   herb (M) closes it. Unlike poisonDrain it never expires on its own. */
+let infectedWound = false;
+const INFECT_RATE = 0.1;   /* hp/s: ~17 real minutes from full health ‒ pressure, not death spiral */
 const THIRST_RATE = 100 / 540;   /* full -> empty in ~9 real minutes */
 const HUNGER_RATE = 100 / 1320;  /* full -> empty in ~22 real minutes */
 
@@ -1086,6 +1107,10 @@ function updateTigers(dt) {
           INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
           INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
           INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
+          INV.herb = 0;
+          infectedWound = true;
+          learn('infection', 'tiger wounds fester \u2014 a healing herb will close them');
+          toast('\u2620\uFE0F your wounds fester \u2014 find a healing herb (M)');
           learn('tiger', 'tigers hunt at night \u2014 fire and torchlight drive them off');
           toast('\u{1F981} the tiger strikes \u2014 you drop what you carry');
           checkDeath();
@@ -1741,6 +1766,20 @@ function eatGathered() {
   if (!cooked && meal.nausea) vomit();
   if (!cooked && meal.know) learn('eat-' + sp, meal.know);
 }
+/* M9: chew a healing herb. Closes a festering tiger wound and restores
+   +25 hp. Medicine, not food ‒ never part of Q's eat order. */
+function useHerb() {
+  if (dead) return;
+  if (INV.herb <= 0) { toast('no herbs \u2014 E harvests the pale-green ones'); return; }
+  INV.herb--;
+  if (infectedWound) {
+    infectedWound = false;
+    learn('herb-cure', 'a healing herb closes a festering wound');
+    toast('the herb works \u2014 the wound closes');
+  }
+  stats.health = Math.min(100, stats.health + 25);
+  toast('\u271A herb \u2014 your health improves');
+}
 const deadEl = document.getElementById('dead');
 function checkDeath() {
   if (!dead && stats.health <= 0) {
@@ -1756,7 +1795,9 @@ function respawn() {
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
   INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
   INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
+  INV.herb = 0;
   poisonDrain = null;
+  infectedWound = false;
   if (camp) {
     rig.position.set(camp.x, camp.g, camp.z);
     toast('you wake at your camp \u2014 what you carried is gone');
@@ -1775,6 +1816,7 @@ function contextHint() {
   const threat = tigers.find((t) => (t.state === 'stalk' || t.state === 'chase') &&
     Math.hypot(t.x - x, t.z - z) < 12);
   if (threat) return '\u{1F981} a tiger is closing \u2014 SPRINT or stand in a lit fire (G)';
+  if (infectedWound) return '\u2620\uFE0F your wounds fester \u2014 M uses a healing herb (' + INV.herb + ')';
   if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - x, i.z - z) < 1.6))
     return 'E \u2014 pick up the coconut';
   if (fires.some((f) => !f.cooking && COOKABLE.some((k) => INV[k] > 0) && Math.hypot(f.x - x, f.z - z) < 2.5))
@@ -1892,7 +1934,7 @@ function updateSky(dt) {
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
             `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
-            `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}\n` +
+            `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
             `seed ${SEED}`;
   hudText = hp;
@@ -1951,12 +1993,15 @@ function frame(t) {
     let hp = 0;
     if (stats.thirst <= 0) hp -= 1.5 * dt;
     if (stats.hunger <= 0) hp -= 1.0 * dt;
-    if (hp === 0 && stats.thirst > 15 && stats.hunger > 15) hp += 0.35 * dt;
+    if (hp === 0 && stats.thirst > 15 && stats.hunger > 15 && !infectedWound) hp += 0.35 * dt;
     stats.health = Math.min(100, Math.max(0, stats.health + hp));
     if (poisonDrain) {   /* M8: poison health bleed (poisonyam), real seconds */
       stats.health = Math.max(0, stats.health - poisonDrain.rate * dt);
       poisonDrain.rem -= dt;
       if (poisonDrain.rem <= 0) { poisonDrain = null; toast('the burning eases \u2014 you survive the pale yam'); }
+    }
+    if (infectedWound) {   /* M9: festering wound bleed (persistent, cured by M herb) */
+      stats.health = Math.max(0, stats.health - INFECT_RATE * dt);
     }
     drinkCd = Math.max(0, drinkCd - dt);
     strikeCd = Math.max(0, strikeCd - dt);

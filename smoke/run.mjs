@@ -381,10 +381,14 @@ patched += `
 
   stats.health = 100; stats.thirst = 100; stats.hunger = 100;
   INV.coconut = 2;
+  INV.herb = 1;   // M9: strike must drop herbs and infect the wound
   for (let i = 0; i < 30 && stats.health >= 80; i++) pump(20);
   if (stats.health >= 80) throw new Error('tiger never struck: ' + stats.health);
   if (INV.coconut !== 0) throw new Error('tiger attack should drop all carried loot');
   if (!learned.has('tiger')) throw new Error('tiger learn entry missing');
+  if (INV.herb !== 0) throw new Error('tiger attack should drop herbs too');
+  if (!infectedWound) throw new Error('tiger strike should infect the wound');
+  if (!learned.has('infection')) throw new Error('infection learn entry missing');
 
   // fire counter: light a fire where the tiger is striking; it retreats
   actFire();
@@ -403,6 +407,7 @@ patched += `
   // reset state that M0‒M5 left behind
   gameMin = 0;
   stats.health = 100; stats.thirst = 100; stats.hunger = 100;
+  infectedWound = false;   // M9: clear the M5 strike infection before the exact-HP dive test
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
   firstNight = true;   // suppress the scripted beat until its dedicated test
 
@@ -516,6 +521,7 @@ patched += `
   /* ---- M7: vegetation framework (plant data, deterministic spawn, growth, harvest) ---- */
 
   stats.health = 100; stats.thirst = 100; stats.hunger = 100;
+  infectedWound = false;   // M9: M5 strike infects; clear so the harvest hint test sees its own line
   setClockP(0.33); pump(10);   // day: tigers hide, nothing stalks
 
   const fiberPlants = plants.filter((p) => p.type === 'fiber');
@@ -612,7 +618,7 @@ patched += `
   gameMin = 0; pump(1);
   const G0 = fiberPlants.find((p) => p.state === 'growing');
   if (!G0) throw new Error('no growing fiber tuft left for the growth test');
-  gameMin += 3000; pump(1);
+  gameMin += 3600; pump(1);   // 2.5 days: covers M9's worn (1.5x) regrow of a just-depleted tuft
   if (G0.state !== 'ready') throw new Error('growing tuft should be ready after a full regrow: ' + G0.state);
   if (F0.state !== 'ready' || F0.chargesLeft !== PLANT_TYPES.fiber.charges)
     throw new Error('depleted tuft should regrow and reset charges: ' + F0.state + '/' + F0.chargesLeft);
@@ -773,6 +779,84 @@ patched += `
       + INV.poisonberry + INV.poisonfern + INV.poisonyam !== 0)
     throw new Error('respawn should drop foraged inventory');
   if (poisonDrain !== null) throw new Error('respawn should clear the poison drain');
+
+  /* ---- M9: medicinal plants + harvesting/regrowth (herb, infection, wear) ---- */
+
+  // herb species: count, height band, minDist; tuft mesh resizes with it
+  const herbPlants = plants.filter((p) => p.type === 'herb');
+  if (herbPlants.length < Math.floor(18 * 0.7)) throw new Error('too few herbs: ' + herbPlants.length);
+  if (herbPlants.some((p) => p.h < 1.0 || p.h > 9.0)) throw new Error('herb outside its height band');
+  for (let i = 0; i < herbPlants.length; i++)
+    for (let j = i + 1; j < herbPlants.length; j++)
+      if (Math.hypot(herbPlants[i].x - herbPlants[j].x, herbPlants[i].z - herbPlants[j].z) < 5)
+        throw new Error('two herbs closer than minDist');
+  if (plantMesh.tuft.count !== kindCount('tuft') * 3) throw new Error('tuft mesh count wrong after M9: ' + plantMesh.tuft.count);
+
+  // first-spawn determinism (private stream, SEED + 1193)
+  {
+    const def = PLANT_TYPES.herb;
+    const r = mulberry32(SEED + def.seedOffset);
+    let first = null, tries = 0;
+    while (!first && tries++ < 4000) {
+      const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * ISLAND_R * 0.96;
+      const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+      if (heightAt(x, z) < def.hmin || heightAt(x, z) > def.hmax) continue;
+      first = { x, z };
+    }
+    const hb = plants.find((p) => p.type === 'herb');
+    if (!hb) throw new Error('no herb planted');
+    if (Math.abs(first.x - hb.x) > 1e-9 || Math.abs(first.z - hb.z) > 1e-9)
+      throw new Error('herb spawn not reproducible from its private stream');
+  }
+
+  // harvest: uncontested ready herb -> E -> +1 herb, charge down, learn entry
+  const H0 = m8pick('herb');
+  rig.position.set(H0.x, Math.max(H0.h, WATER - 0.25), H0.z);
+  actUse();
+  if (INV.herb !== 1) throw new Error('herb harvest did not land: ' + INV.herb);
+  if (H0.chargesLeft !== PLANT_TYPES.herb.charges - 1) throw new Error('herb charge not decremented');
+  if (!learned.has('herb')) throw new Error('herb learn entry missing');
+
+  // infection: persistent real-second bleed (regen off via low thirst), cured by M
+  infectedWound = true; poisonDrain = null;
+  stats.health = 100; stats.thirst = 10; stats.hunger = 20;
+  const hp9a = stats.health;
+  pump(60);   // ~1 real second
+  if (stats.health >= hp9a) throw new Error('festering wound should bleed health: ' + stats.health + ' vs ' + hp9a);
+  stats.health = 60; INV.herb = 2;
+  useHerb();
+  if (stats.health !== 85) throw new Error('herb should restore +25 hp: ' + stats.health);
+  if (INV.herb !== 1) throw new Error('herb was not consumed');
+  if (infectedWound) throw new Error('herb should close the festering wound');
+  if (!learned.has('herb-cure')) throw new Error('herb-cure learn entry missing');
+  const hp9b = stats.health;
+  pump(60);
+  if (stats.health !== hp9b) throw new Error('cured wound: no bleed and no regen expected: ' + stats.health);
+
+  // regrowth wear: each full depletion slows the next regrow (state only, no rng)
+  while (H0.state === 'ready') actUse();
+  if (H0.state !== 'depleted' || H0.chargesLeft !== 0)
+    throw new Error('herb should deplete at 0 charges: ' + H0.state + '/' + H0.chargesLeft);
+  gameMin = 0; pump(1);
+  gameMin += 7200; pump(1);   // 5 game days: full regrow even at the worn rate
+  if (H0.state !== 'ready') throw new Error('worn herb should regrow: ' + H0.state);
+  if (H0.chargesLeft !== PLANT_TYPES.herb.charges) throw new Error('regrow should reset charges: ' + H0.chargesLeft);
+  if (Math.abs(H0.wear - 1.5) > 1e-9) throw new Error('wear should rise to 1.5 after one depletion: ' + H0.wear);
+  while (H0.state === 'ready') actUse();
+  gameMin = 0; pump(1);
+  gameMin += 7200; pump(1);
+  if (Math.abs(H0.wear - 2.0) > 1e-9) throw new Error('wear should rise to 2.0 after two depletions: ' + H0.wear);
+  if (!herbPlants.some((p) => p !== H0 && p.state === 'ready' && p.wear === 1))
+    throw new Error('never-depleted herbs should keep wear 1');
+
+  // respawn drops the herb and cures the wound
+  infectedWound = true; INV.herb = 1;
+  stats.health = 0; checkDeath();
+  if (!dead) throw new Error('player should be dead at 0 health (M9)');
+  respawn();
+  if (dead) throw new Error('respawn (M9) failed');
+  if (INV.herb !== 0) throw new Error('respawn should drop herbs');
+  if (infectedWound) throw new Error('respawn should clear the festering wound');
 }
 `;
 const file = join(here, '.game-smoke.mjs');
