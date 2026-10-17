@@ -1174,9 +1174,8 @@ patched += `
 
     // 2. registry: slots 0-3 are exactly the 4 reference species in frame()
     //    order, bound to the canonical arrays with the unchanged pre-M12
-    //    populations. M13 registers 3 more (slots 4-6, asserted in the M13
-    //    block) so the total is 7.
-    if (animals.length !== 9) throw new Error('M12: expected 9 registered species (4 reference + 3 M13 + 1 M14 + 1 M15), got ' + animals.length);
+    //    populations. M13-M17 register 6 more (slots 4-9) so the total is 10.
+    if (animals.length !== 10) throw new Error('M12: expected 10 registered species (4 reference + 3 M13 + 1 M14 + 1 M15 + 1 M17), got ' + animals.length);
     const want = [['fish', schools, 5, 'early'], ['crab', crabs, 15, 'early'],
                   ['tiger', tigers, 3, 'late'], ['gull', gulls, 5, 'late']];
     want.forEach(([id, pop, n, phase], i) => {
@@ -1220,7 +1219,7 @@ patched += `
     const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
 
     // 1. registry: the three M13 species after the gulls, 'late', canonical arrays
-    if (animals.length !== 9) throw new Error('M13: expected 9 registered species, got ' + animals.length);
+    if (animals.length !== 10) throw new Error('M13: expected 10 registered species, got ' + animals.length);
     const want = [['monkey', monkeys, 5], ['lizard', lizards, 4], ['snake', snakes, 6]];
     want.forEach(([id, pop, n], j) => {
       const sp = animals[4 + j];
@@ -1404,7 +1403,7 @@ patched += `
     const monkeySnap = monkeys.map((m) => m.stealCd);
 
     // 1. registry: slot 7 is the pelican (M12/M13 slots untouched); crabs number 15
-    if (animals.length !== 9) throw new Error('M14: expected 9 registered species, got ' + animals.length);
+    if (animals.length !== 10) throw new Error('M14: expected 10 registered species, got ' + animals.length);
     const psp = animals[7];
     if (!psp || psp.id !== 'pelican' || psp.pop !== pelicans || psp.pop.length !== 3 ||
         psp.phase !== 'late' || typeof psp.step !== 'function')
@@ -1590,7 +1589,7 @@ patched += `
     const stillGulls = () => { gulls.forEach((g) => { g.diveTell = 0; }); gullDiveCd = 999; };
 
     // 1. registry: slot 8 is the shark ('early', canonical array, pop 2)
-    if (animals.length !== 9) throw new Error('M15: expected 9 registered species, got ' + animals.length);
+    if (animals.length !== 10) throw new Error('M15: expected 10 registered species, got ' + animals.length);
     const ssp = animals[8];
     if (!ssp || ssp.id !== 'shark' || ssp.pop !== sharks || ssp.pop.length !== 2 ||
         ssp.phase !== 'early' || typeof ssp.step !== 'function')
@@ -1894,6 +1893,140 @@ patched += `
     tigers.forEach((t, i) => { const q = tigerSnap[i];
       t.x = q.x; t.z = q.z; t.state = q.state;
       t.panicT = q.panicT; t.panicX = q.panicX; t.panicZ = q.panicZ; });
+  }
+
+  /* ---- M17: animal ecosystem integration + balancing (the spider, 10th species) ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
+    const spiderSnap = spiders.map((s) => ({ x: s.x, z: s.z, dir: s.dir, phase: s.phase,
+        raidCd: s.raidCd, tellT: s.tellT, fleeT: s.fleeT, fleeX: s.fleeX, fleeZ: s.fleeZ,
+        pfleeT: s.pfleeT }));
+    const invSnap = { ...INV };
+    const learnedSnap = { spider: learned.has('spider'), spiderfire: learned.has('spiderfire') };
+    const fFence = camp.structures.fence, fTorch = camp.structures.torch;
+    const firesSnap = fires.map((f) => ({ x: f.x, z: f.z }));
+
+    // 1. registry: the full 10-species island, slot 9 is the spider ('late', pop 3)
+    if (animals.length !== 10) throw new Error('M17: expected 10 registered species, got ' + animals.length);
+    const sp9 = animals[9];
+    if (!sp9 || sp9.id !== 'spider' || sp9.pop !== spiders || sp9.pop.length !== 3 ||
+        sp9.phase !== 'late' || typeof sp9.step !== 'function')
+      throw new Error('M17: registry slot 9 must be the spider descriptor');
+    const wantIds = ['fish', 'crab', 'tiger', 'gull', 'monkey', 'lizard', 'snake', 'pelican', 'shark'];
+    wantIds.forEach((id, i) => {
+      if (!animals[i] || animals[i].id !== id)
+        throw new Error('M17: registry slot ' + i + ' drifted to ' + (animals[i] && animals[i].id));
+    });
+
+    // 2. spawn invariants: jungle-edge/camp band, 30u+ from spawn, 15u+ from tiger homes, 8u+ apart
+    for (const s of spiders) {
+      const h = heightAt(s.hx, s.hz);
+      if (h < 3 || h > 12) throw new Error('M17: spider home outside the 3..12 band: ' + h);
+      if (Math.hypot(s.hx - spawn.x, s.hz - spawn.z) < 30) throw new Error('M17: spider home < 30u from spawn');
+      if (tigers.some((t) => Math.hypot(t.hx - s.hx, t.hz - s.hz) < 15))
+        throw new Error('M17: spider home < 15u from a tiger home');
+    }
+    for (let i = 0; i < spiders.length; i++)
+      for (let j = i + 1; j < spiders.length; j++)
+        if (Math.hypot(spiders[i].hx - spiders[j].hx, spiders[i].hz - spiders[j].hz) < 8)
+          throw new Error('M17: spider homes must be 8u+ apart');
+
+    // 2b. coexistence sanity (10 species): no empty population, no NaN positions, spider mesh built
+    for (const sp of animals) {
+      if (!sp.pop.length) throw new Error('M17: the ' + sp.id + ' population is empty');
+      if (sp.pop.some((a) => !isFinite(a.x) || !isFinite(a.z)))
+        throw new Error('M17: the ' + sp.id + ' population has a NaN position');
+    }
+    if (spiders.some((s) => !s.grp || s.grp.children.length < 8 || !isFinite(s.grp.position.x) ||
+        !isFinite(s.grp.position.y) || !isFinite(s.grp.position.z)))
+      throw new Error('M17: a spider mesh is missing or NaN');
+
+    // 3. day: the spiders hold at their dens, nothing is stolen
+    pAt(0.33); pump(2);
+    {
+      if (dayFactor < 0.25) throw new Error('M17: noon clock setup failed, dayFactor ' + dayFactor);
+      for (const k of SPIDER_MEAT_ORDER) INV[k] = 0;
+      const s0 = spiders[0];
+      s0.x = s0.hx + 10; s0.z = s0.hz;
+      pump(360);   // 6 s: returnHome pulls the displaced spider back
+      if (Math.hypot(s0.hx - s0.x, s0.hz - s0.z) >= 10)
+        throw new Error('M17: the day spider should return to its den, ' + Math.hypot(s0.hx - s0.x, s0.hz - s0.z).toFixed(1) + 'u out');
+      if (SPIDER_MEAT_ORDER.some((k) => INV[k] !== 0)) throw new Error('M17: day spiders must not steal');
+    }
+
+    // 4. night, unlit camp, meat present, player at the camp: exactly one meat sniped
+    pAt(0.85); pump(2);
+    {
+      if (dayFactor >= 0.25) throw new Error('M17: night clock setup failed, dayFactor ' + dayFactor);
+      camp.structures.fence = null; camp.structures.torch = null;   // unfortified
+      fires.forEach((f) => { f.x += 200; f.z += 200; });   // no camp fire can lit it
+      if (campIsLit()) throw new Error('M17: setup - the camp must be dark');
+      for (const k of SPIDER_MEAT_ORDER) INV[k] = 0;
+      INV.crabCooked = 1;
+      const s0 = spiders[0];
+      s0.x = camp.x - 6; s0.z = camp.z;
+      s0.raidCd = 0; s0.tellT = 0; s0.fleeT = 0; s0.pfleeT = 0;
+      park(camp.x, camp.z);   // inside SPIDER_RAID_RANGE, 3u from the stop point (flee radius 2)
+      pump(400);   // ~6.7 s: 3u creep at 1.8u/s + 0.9 s tell
+      if (INV.crabCooked !== 0) throw new Error('M17: the spider should have sniped the unlit camp meat: ' + INV.crabCooked);
+      if (s0.raidCd <= 0) throw new Error('M17: the raid should set the per-spider cooldown');
+      if (!learned.has('spider')) throw new Error('M17: the raid should teach the tell');
+      s0.x = spiderSnap[0].x; s0.z = spiderSnap[0].z;
+      s0.raidCd = 0; s0.tellT = 0; s0.fleeT = 0; s0.pfleeT = 0;
+      for (const k of SPIDER_MEAT_ORDER) INV[k] = 0;   // reset before the lit-camp leg
+      INV.fishRaw = 1;   // a different meat item: proves the order, not the item, is the target
+    }
+
+    // 5. night, lit camp: the spider never crosses the perimeter, the tell is learned
+    {
+      camp.structures.torch = fTorch;   // the universal counter: fire/torch, no fence needed
+      if (!campIsLit()) throw new Error('M17: setup - the camp must be lit for the perimeter test');
+      const s0 = spiders[0];
+      s0.x = camp.x - 5; s0.z = camp.z;   // inside the blocked radius
+      s0.raidCd = 0; s0.tellT = 0; s0.fleeT = 0; s0.pfleeT = 0;
+      park(camp.x, camp.z);
+      pump(300);   // 5 s: enough frames to cross the perimeter if the veto fails
+      if (INV.fishRaw !== 1) throw new Error('M17: the lit camp should keep the spider from the meat: ' + INV.fishRaw);
+      if (!learned.has('spiderfire')) throw new Error('M17: the held perimeter should teach the fire tell');
+      if (Math.hypot(camp.x - s0.x, camp.z - s0.z) < SPIDER_RAID_STOP)
+        throw new Error('M17: the lit-camp veto should stop the spider before the steal point: ' + Math.hypot(camp.x - s0.x, camp.z - s0.z).toFixed(2));
+      s0.x = spiderSnap[0].x; s0.z = spiderSnap[0].z;
+      s0.raidCd = 0; s0.tellT = 0; s0.fleeT = 0; s0.pfleeT = 0;
+      camp.structures.torch = null; camp.structures.fence = null;
+    }
+
+    // 6. alarm-bus reaction only: a nearby alarm starts the flee, the spider never emits
+    alarms.length = 0;
+    {
+      const s1 = spiders[1];
+      const sA = { fleeT: s1.fleeT, fleeX: s1.fleeX, fleeZ: s1.fleeZ };
+      const p1x = s1.x, p1z = s1.z;
+      alarmRaise('scream', p1x, p1z, 20, 4);
+      pump(2);
+      if (!(s1.fleeT > 0)) throw new Error('M17: the spider should flee a nearby alarm');
+      if (s1.fleeX !== p1x || s1.fleeZ !== p1z)
+        throw new Error('M17: the spider flee should aim away from the alarm');
+      alarms.length = 0;
+      s1.fleeT = sA.fleeT; s1.fleeX = sA.fleeX; s1.fleeZ = sA.fleeZ;
+    }
+
+    // leave a clean state (M17)
+    alarms.length = 0;
+    park(spawn.x, spawn.z);
+    setWeatherDebug('clear');
+    pAt(0.33);
+    camp.structures.fence = fFence; camp.structures.torch = fTorch;
+    fires.forEach((f, i) => { f.x = firesSnap[i].x; f.z = firesSnap[i].z; });
+    Object.assign(INV, invSnap);
+    spiders.forEach((s, i) => { const q = spiderSnap[i];
+      s.x = q.x; s.z = q.z; s.dir = q.dir; s.phase = q.phase;
+      s.raidCd = q.raidCd; s.tellT = q.tellT; s.fleeT = q.fleeT;
+      s.fleeX = q.fleeX; s.fleeZ = q.fleeZ; s.pfleeT = q.pfleeT;
+      s.legs.forEach((l) => { l.rotation.z = 0; });
+    });
+    if (!learnedSnap.spider) learned.delete('spider');
+    if (!learnedSnap.spiderfire) learned.delete('spiderfire');
   }
 }
 `;

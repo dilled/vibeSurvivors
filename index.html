@@ -2215,6 +2215,163 @@ registerAnimal({
   threat: 'never killable, the spear does nothing; curious about a player in the water, drawn by festering-wound blood, bolder in a storm, aggressive at dawn/dusk; the gulls scream while it circles (M15)',
 });
 
+/* ---- spiders (M17): the 10th species. Big tarantula-type, night-only,
+   low threat, non-lethal, no damage. By day it holds still at its jungle-edge
+   den; at night it creeps into an unlit camp where the player is nearby and
+   snipes exactly one leftover meat item (the M13 lizard-raid mirror) after a
+   0.9 s clicking tell (front legs raised). A lit fire or the camp torch is
+   the universal counter (no fence needed): it keeps the spider off the camp
+   perimeter. The spider only reacts on the M16 alarm bus (flee 3 s), it never
+   emits. Cave blind spiders and the silk resource are deferred (no cave
+   terrain / no crafting until M20). Spawn rng() calls live strictly AFTER
+   the M15 shark block (determinism ‒ keep it that way). ---- */
+const SPIDER_SPEED = 1.8, SPIDER_FLEE_SPEED = 3.4;
+const SPIDER_WANDER = { f1: 0.06, f2: 0.07, rx: 5, rz: 5, homeR: 8, minStep: 0.6, speed: SPIDER_SPEED, still: 0 };
+const SPIDER_TELL_T = 0.9, SPIDER_RAID_CD = 45, SPIDER_RAID_RANGE = 12, SPIDER_RAID_STOP = 3;
+const SPIDER_CAMP_BLOCK_R = 7, SPIDER_PLAYER_FLEE_R = 2, SPIDER_PLAYER_FLEE_T = 2, SPIDER_ALARM_FLEE_T = 3;
+const SPIDER_MEAT_ORDER = LIZ_MEAT_ORDER;   /* same leftover-meat priority as the lizard dusk raid */
+
+function buildSpiderMesh(x, g, z) {
+  const grp = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x241d18 });
+  const abdomen = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.3, 0.42), mat);
+  abdomen.position.set(0, 0.26, -0.18);
+  const thorax = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.26), mat);
+  thorax.position.set(0, 0.22, 0.2);
+  grp.add(abdomen, thorax);
+  const legs = [];
+  const legGeo = new THREE.BoxGeometry(0.05, 0.05, 0.5);
+  for (const side of [-1, 1])
+    for (let i = 0; i < 4; i++) {
+      const leg = new THREE.Group();
+      leg.position.set(side * 0.18, 0.22, 0.24 - i * 0.16);
+      const lm = new THREE.Mesh(legGeo, mat);
+      lm.position.x = side * 0.25;
+      leg.add(lm);
+      grp.add(leg);
+      legs.push(leg);
+    }
+  grp.position.set(x, g, z);
+  scene.add(grp);
+  return { grp, legs };
+}
+
+const spiders = [];
+{
+  for (let i = 0; i < 3; i++) {
+    let x = 0, z = 0, tries = 0;
+    do {
+      tries++;
+      const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 0.9;
+      x = Math.cos(a) * r, z = Math.sin(a) * r;
+    } while (tries < 4000 && (heightAt(x, z) < 3 || heightAt(x, z) > 12 ||
+      Math.hypot(x - spawn.x, z - spawn.z) < 30 ||
+      tigers.some((t) => Math.hypot(t.hx - x, t.hz - z) < 15) ||
+      spiders.some((s) => Math.hypot(s.hx - x, s.hz - z) < 8)));
+    const m = buildSpiderMesh(x, heightAt(x, z), z);
+    spiders.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2, phase: rng() * 100,
+                   raidCd: 0, tellT: 0, fleeT: 0, fleeX: 0, fleeZ: 0,
+                   pfleeT: 0, grp: m.grp, legs: m.legs });
+  }
+}
+
+function updateSpiders(dt) {
+  if (!started || dead) return;
+  const px = rig.position.x, pz = rig.position.z;
+  const night = dayFactor < 0.25;   /* 'late' phase: the fresh frame dayFactor */
+  const campNight = night && camp &&
+    Math.hypot(px - camp.x, pz - camp.z) < SPIDER_RAID_RANGE &&
+    SPIDER_MEAT_ORDER.some((k) => INV[k] > 0);
+  const campLit = campNight && campIsLit();   /* the universal counter: fire/torch, no fence needed */
+  for (const s of spiders) {
+    if (s.raidCd > 0) s.raidCd -= dt;
+    if (s.fleeT > 0) s.fleeT -= dt;
+    if (s.pfleeT > 0) s.pfleeT -= dt;
+    const dp = Math.hypot(px - s.x, pz - s.z);
+    const dc = camp ? Math.hypot(camp.x - s.x, camp.z - s.z) : Infinity;
+    /* M16/M17: the spider only reacts on the alarm bus, never emits */
+    const al = alarmsNear(s.x, s.z, ['scream', 'attack', 'alert']);
+    if (al && s.fleeT <= 0) { s.fleeT = SPIDER_ALARM_FLEE_T; s.fleeX = al.x; s.fleeZ = al.z; }
+    let dir = s.dir, speed = 0;
+    if (!night) {
+      /* day: back to the den and hold still (the tiger/lizard "hide" pattern) */
+      const hs = returnHome(s, SPIDER_SPEED);   /* M12 */
+      if (hs > 0) { dir = s.dir; speed = hs; }
+    } else if (s.fleeT > 0) {
+      /* startled by a nearby alarm: off, fast */
+      dir = Math.atan2(s.x - s.fleeX, s.z - s.fleeZ);
+      speed = SPIDER_FLEE_SPEED;
+    } else if (s.pfleeT > 0) {
+      dir = Math.atan2(s.x - px, s.z - pz);
+      speed = SPIDER_FLEE_SPEED;
+    } else if (dp < SPIDER_PLAYER_FLEE_R) {
+      /* up close the spider loses its nerve (priority over raid) */
+      s.pfleeT = SPIDER_PLAYER_FLEE_T;
+      dir = Math.atan2(s.x - px, s.z - pz);
+      speed = SPIDER_FLEE_SPEED;
+    } else if (campLit && dc < SPIDER_CAMP_BLOCK_R) {
+      /* a lit camp: the spider never enters the perimeter (fire/torch counter) */
+      const mv = homeWander(s, SPIDER_WANDER);   /* M12 */
+      dir = mv.dir;
+      speed = mv.speed;
+      if (!learned.has('spiderfire'))
+        learn('spiderfire', 'a lit fire or torch keeps the spider from the camp ‒ no fence needed');
+    } else if (campNight && s.raidCd <= 0) {
+      /* night raid: creep in and snipe one leftover meat item, clicking tell first */
+      dir = Math.atan2(camp.x - s.x, camp.z - s.z);
+      speed = dc > SPIDER_RAID_STOP ? SPIDER_SPEED : 0;
+      if (dc <= SPIDER_RAID_STOP) {
+        if (s.tellT <= 0) {
+          s.tellT = SPIDER_TELL_T;
+          toast('\u{1F577}️ a spider is clicking near the camp...');
+        }
+        s.tellT -= dt;
+        if (s.tellT <= 0) {
+          const pick = SPIDER_MEAT_ORDER.find((k) => INV[k] > 0);
+          if (pick) {
+            INV[pick]--;
+            s.raidCd = SPIDER_RAID_CD;
+            learn('spider', 'the big spider clicks before it snipes leftover meat from an unlit camp at night');
+            toast('\u{1F577} the spider takes your ' + pick);
+          }
+          s.tellT = 0;
+        }
+      } else {
+        s.tellT = 0;
+      }
+    } else {
+      const mv = homeWander(s, SPIDER_WANDER);   /* M12 */
+      dir = mv.dir;
+      speed = mv.speed;
+    }
+    const block = campLit;   /* keep the lit-camp perimeter closed */
+    applyMove(s, dir, speed, dt,
+      (x, z) => heightAt(x, z) >= 0.5 &&
+        !(block && Math.hypot(x - camp.x, z - camp.z) < SPIDER_CAMP_BLOCK_R));   /* M12 */
+    if (!(campNight && s.raidCd <= 0 && dc <= SPIDER_RAID_STOP)) s.tellT = 0;
+    s.grp.position.set(s.x, heightAt(s.x, s.z), s.z);
+    s.grp.rotation.y = dir;
+    for (let i = 0; i < s.legs.length; i++) {
+      const side = i < 4 ? -1 : 1, li = i % 4;
+      if (s.tellT > 0 && li < 2)
+        s.legs[i].rotation.z = side * 0.9;   /* the clicking tell: front legs raised */
+      else
+        s.legs[i].rotation.z = speed > 0 ? side * Math.sin(runT * 8 + li * 1.7) * 0.3 : 0;
+    }
+  }
+}
+
+/* M17: the spider, registry slot 9 (last) ‒ the 'late' phase, after the
+   M15 shark (slots 0-8 asserted by the M12-M15 smoke blocks). */
+registerAnimal({
+  id: 'spider', label: 'spiders', pop: spiders, phase: 'late',
+  band: 'jungle edge/camp 3..12', count: 3, active: () => dayFactor < 0.25,
+  speed: { creep: SPIDER_SPEED, flee: SPIDER_FLEE_SPEED }, homeR: 8,
+  terrainOK: (x, z) => heightAt(x, z) >= 0.5,
+  step: (dt) => updateSpiders(dt),
+  threat: 'low, non-lethal, no damage: night-only, creeps into an unlit camp near the player and snipes one leftover meat item after a 0.9 s clicking tell; a lit fire or torch keeps it off the perimeter (no fence needed); alarm-bus reaction only (M17)',
+});
+
 /* ---- the spear (attached to the right arm) ---- */
 const spearMesh = (() => {
   const g = new THREE.Group();
