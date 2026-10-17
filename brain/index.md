@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-17T22:26:47.163Z._
+_Auto-generated. Last updated 2026-10-17T22:57:34.453Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -10,6 +10,7 @@ _Auto-generated. Last updated 2026-10-17T22:26:47.163Z._
 - [m13-land-wildlife](pages/m13-land-wildlife.md) — category: decision | tags: [animals, m13, registry, monkeys, lizards, snakes, determinism] | ## What shipped (M13 ‒ three land species via the M12 registry)
 - [m14-beach-air-wildlife](pages/m14-beach-air-wildlife.md) — category: decision | tags: [animals, m14, registry, pelicans, gulls, crabs, determinism] | ## What shipped (M14 ‒ beach/air ecosystem)
 - [m15-sharks-fish-ecosystem](pages/m15-sharks-fish-ecosystem.md) — category: decision | tags: [animals, m15, sharks, fish, registry, determinism] | ## What shipped (M15 ‒ sharks + expanded fish ecosystem)
+- [m16-animal-alarm-bus](pages/m16-animal-alarm-bus.md) — category: decision | tags: [animals, m16, alarm-bus, cross-species, determinism] | ## What shipped (M16 ‒ animal alarm bus + cross-species reactions)
 - [m2-camp-system](pages/m2-camp-system.md) — category: decision | tags: [camp, building, shelter, bed, respawn] | ## What shipped (M2 — camp build spot + simple structure placement)
 - [m3-camp-fence-light](pages/m3-camp-fence-light.md) — category: decision | tags: [camp, fence, torch, light] | ## What shipped (M3 — fence + camp light/fire integration)
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
