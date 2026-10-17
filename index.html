@@ -592,32 +592,36 @@ function updateSchools(dt) {
 }
 
 /* ---- crabs: scuttle the beach, flee if you sprint, caught by hand ---- */
+function buildCrabGroup(bodyMat, legMat) {
+  const grp = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.26), bodyMat);
+  body.position.y = 0.12;
+  grp.add(body);
+  const clawGeo = new THREE.BoxGeometry(0.12, 0.09, 0.12);
+  const clawL = new THREE.Mesh(clawGeo, bodyMat); clawL.position.set(-0.24, 0.1, 0.16); grp.add(clawL);
+  const clawR = new THREE.Mesh(clawGeo, bodyMat); clawR.position.set(0.24, 0.1, 0.16); grp.add(clawR);
+  const legs = [];
+  const legGeo = new THREE.BoxGeometry(0.05, 0.05, 0.24);
+  for (let side = -1; side <= 1; side += 2) {
+    for (let i = 0; i < 4; i++) {
+      const leg = new THREE.Mesh(legGeo, legMat);
+      leg.position.set(side * (0.12 + 0.1 * i), 0.06, -0.08 + i * 0.09);
+      grp.add(leg);
+      legs.push(leg);
+    }
+  }
+  return { grp, legs };
+}
 const crabs = [];
 {
   const bodyMat = new THREE.MeshLambertMaterial({ color: 0xc05a33 });
   const legMat = new THREE.MeshLambertMaterial({ color: 0x9a4326 });
   for (const p of scatter(6, 0.35, 1.5, 25)) {
-    const grp = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.26), bodyMat);
-    body.position.y = 0.12;
-    grp.add(body);
-    const clawGeo = new THREE.BoxGeometry(0.12, 0.09, 0.12);
-    const clawL = new THREE.Mesh(clawGeo, bodyMat); clawL.position.set(-0.24, 0.1, 0.16); grp.add(clawL);
-    const clawR = new THREE.Mesh(clawGeo, bodyMat); clawR.position.set(0.24, 0.1, 0.16); grp.add(clawR);
-    const legs = [];
-    const legGeo = new THREE.BoxGeometry(0.05, 0.05, 0.24);
-    for (let side = -1; side <= 1; side += 2) {
-      for (let i = 0; i < 4; i++) {
-        const leg = new THREE.Mesh(legGeo, legMat);
-        leg.position.set(side * (0.12 + 0.1 * i), 0.06, -0.08 + i * 0.09);
-        grp.add(leg);
-        legs.push(leg);
-      }
-    }
-    grp.position.set(p.x, p.h, p.z);
-    scene.add(grp);
+    const m = buildCrabGroup(bodyMat, legMat);
+    m.grp.position.set(p.x, p.h, p.z);
+    scene.add(m.grp);
     crabs.push({ x: p.x, z: p.z, hx: p.x, hz: p.z, dir: rng() * Math.PI * 2,
-                turnT: rng() * 2, fleeT: 0, grp, legs, alive: true });
+                turnT: rng() * 2, fleeT: 0, grp: m.grp, legs: m.legs, alive: true });
   }
 }
 function updateCrabs(dt) {
@@ -638,7 +642,9 @@ function updateCrabs(dt) {
     }
     const dh = Math.hypot(c.x - c.hx, c.z - c.hz);
     if (dh > 9) c.dir = Math.atan2(c.hx - c.x, c.hz - c.z);
-    const speed = c.fleeT > 0 ? 2.3 : 1.0;
+    /* M6: crabs are bolder after dark — the night forage loop works */
+    const nightK = dayFactor < 0.5 ? 1.6 : 1.0;
+    const speed = (c.fleeT > 0 ? 2.3 : 1.0) * nightK;
     c.x += Math.cos(c.dir) * speed * dt;
     c.z += Math.sin(c.dir) * speed * dt;
     c.grp.position.set(c.x, heightAt(c.x, c.z), c.z);
@@ -725,8 +731,56 @@ const tigers = [];
                   phase: rng() * 100, atkCd: 0, grp: m.grp, legs: m.legs });
   }
 }
+
+/* M6: three extra crabs around the spawn beach so the night forage loop has
+   targets. Spawn rng() calls live strictly AFTER the tiger block (the tiger
+   block is the last world-gen rng() consumer before M6 — keep it that way).
+   */
+{
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xc05a33 });
+  const legMat = new THREE.MeshLambertMaterial({ color: 0x9a4326 });
+  for (let i = 0; i < 3; i++) {
+    let x = 0, z = 0, tries = 0;
+    do {
+      tries++;
+      const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * 15;
+      x = spawn.x + Math.cos(a) * r, z = spawn.z + Math.sin(a) * r;
+    } while (tries < 2000 && (heightAt(x, z) < 0.35 || heightAt(x, z) > 1.5 ||
+      crabs.some((c) => Math.hypot(c.x - x, c.z - z) < 2.5)));
+    const m = buildCrabGroup(bodyMat, legMat);
+    m.grp.position.set(x, heightAt(x, z), z);
+    scene.add(m.grp);
+    crabs.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2,
+                turnT: rng() * 2, fleeT: 0, grp: m.grp, legs: m.legs, alive: true });
+  }
+}
+
+/* M6: scripted first-night beat — on the player's first dusk the nearest
+   tiger slips ~13 m close. A lit camp/torch or a fire nearby makes it safe;
+   otherwise it stalks in for the scare. Deterministic (no rng). */
+let firstNight = false;
+function firstNightBeat() {
+  const px = rig.position.x, pz = rig.position.z;
+  const cx = camp ? camp.x : px, cz = camp ? camp.z : pz;
+  let tn = null, bd = Infinity;
+  for (const t of tigers) {
+    const d = Math.hypot(t.hx - cx, t.hz - cz);
+    if (d < bd) { bd = d; tn = t; }
+  }
+  for (let k = 0; k < 16; k++) {
+    const a = (k / 16) * Math.PI * 2 + tn.phase;
+    const x = px + Math.cos(a) * 13, z = pz + Math.sin(a) * 13;
+    if (heightAt(x, z) >= 0.5) { tn.x = x; tn.z = z; tn.state = 'patrol'; tn.atkCd = 0; break; }
+  }
+  learn('night', 'the island turns after dark — fire and torchlight are your only wall against the tiger');
+  toast('it is night — the jungle stirs');
+}
 function updateTigers(dt) {
   if (!started || dead) return;
+  if (!firstNight && started && !dead && dayFactor < 0.5) {
+    firstNight = true;
+    firstNightBeat();
+  }
   const active = dayFactor < 0.5;   /* dusk, night, dawn */
   const px = rig.position.x, pz = rig.position.z;
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
@@ -795,6 +849,138 @@ function updateTigers(dt) {
     t.grp.rotation.y = dir;
     for (let i = 0; i < t.legs.length; i++)
       t.legs[i].rotation.x = speed > 0 ? Math.sin(runT * (3 + speed * 1.4) + i * 1.7) * 0.55 : 0;
+  }
+}
+
+/* ---- gulls (M6): daytime beach nuisance. Steal one carried food item,
+   dive-bomb your head, scream and drift inland when something is in the
+   water (shark foreshadow — the shark itself is M15). Non-lethal, no keys,
+   cannot be killed; the counter is timing and knowledge. M14's full gull
+   system supersedes this. Spawn rng() calls live strictly AFTER the tiger
+   block (determinism). */
+const GULL_SPEED = 8.5, GULL_ALT = 2.2;
+const GULL_STEAL_R = 12, GULL_STEAL_CD = 45;
+const GULL_DIVE_R = 15, GULL_DIVE_DMG = 8, GULL_DIVE_TELL = 3, GULL_DIVE_CD = 60;
+const GULL_FOOD_ORDER = ['crabCooked', 'fishCooked', 'crab', 'fishRaw', 'coconut'];
+
+function buildGullMesh(x, g, z) {
+  const grp = new THREE.Group();
+  const white = new THREE.MeshLambertMaterial({ color: 0xeef1f3 });
+  const grey = new THREE.MeshLambertMaterial({ color: 0x949a9f, side: THREE.DoubleSide });
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.6, 5), white);
+  body.rotation.x = Math.PI / 2;   /* point forward (+z) */
+  grp.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.14), white);
+  head.position.set(0, 0.03, 0.36);
+  grp.add(head);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.16, 4),
+    new THREE.MeshLambertMaterial({ color: 0xe0a11c }));
+  beak.rotation.x = Math.PI / 2;
+  beak.position.set(0, 0.02, 0.5);
+  grp.add(beak);
+  const wingGeo = new THREE.PlaneGeometry(0.7, 0.26);
+  wingGeo.rotateX(-Math.PI / 2);
+  const wingL = new THREE.Mesh(wingGeo, grey);
+  wingL.position.set(-0.42, 0.04, 0);
+  const wingR = new THREE.Mesh(wingGeo, grey);
+  wingR.position.set(0.42, 0.04, 0);
+  grp.add(wingL, wingR);
+  grp.position.set(x, g, z);
+  scene.add(grp);
+  return { grp, wingL, wingR };
+}
+
+const gulls = [];
+{
+  for (let i = 0; i < 5; i++) {
+    let x = 0, z = 0, tries = 0;
+    do {
+      tries++;
+      const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 0.9;
+      x = Math.cos(a) * r, z = Math.sin(a) * r;
+    } while (tries < 4000 && (heightAt(x, z) < 0.3 || heightAt(x, z) > 6 ||
+      Math.hypot(x - spawn.x, z - spawn.z) < 15 ||
+      gulls.some((g) => Math.hypot(g.hx - x, g.hz - z) < 15)));
+    const m = buildGullMesh(x, heightAt(x, z), z);
+    gulls.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2, phase: rng() * 100,
+                 stealCd: 0, diveTell: 0, grp: m.grp, wingL: m.wingL, wingR: m.wingR });
+  }
+}
+
+let gullDiveCd = 0;    /* global dive-bomb cooldown */
+let gullWaterT = 0;    /* seconds left of the "something is in the water" inland drift */
+function updateGulls(dt) {
+  if (!started || dead) return;
+  const px = rig.position.x, pz = rig.position.z;
+  const inWater = heightAt(px, pz) < 0.5;
+  gullDiveCd = Math.max(0, gullDiveCd - dt);
+  gullWaterT = Math.max(0, gullWaterT - dt);
+  const carrying = GULL_FOOD_ORDER.some((k) => INV[k] > 0);
+  for (const gu of gulls) {
+    if (gu.stealCd > 0) gu.stealCd -= dt;
+    let dir = gu.dir, speed = 0;
+    if (dayFactor < 0.5) {
+      /* night: fly home and perch still (the tiger's "hide" pattern) */
+      const dh = Math.hypot(gu.hx - gu.x, gu.hz - gu.z);
+      if (dh > 0.3) { dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z); speed = GULL_SPEED * 0.8; }
+    } else {
+      /* day: deterministic sin/cos hover-wander around home (no rng per frame) */
+      if (gullWaterT > 0) {
+        /* the water is not safe: the flock screams and drifts inland */
+        dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z);
+        speed = GULL_SPEED * 0.6;
+      } else {
+        const wx = gu.hx + Math.sin(runT * 0.11 + gu.phase) * 20;
+        const wz = gu.hz + Math.cos(runT * 0.13 + gu.phase * 1.6) * 16;
+        if (Math.hypot(gu.hx - gu.x, gu.hz - gu.z) > 26) {
+          dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z);
+          speed = GULL_SPEED;
+        } else {
+          const dx = wx - gu.x, dz = wz - gu.z;
+          if (Math.hypot(dx, dz) > 1) { dir = Math.atan2(dx, dz); speed = GULL_SPEED; }
+        }
+      }
+      /* steal: take exactly one carried food item, per-gull cooldown */
+      if (gu.stealCd <= 0 && carrying && Math.hypot(px - gu.x, pz - gu.z) < GULL_STEAL_R) {
+        const pick = GULL_FOOD_ORDER.find((k) => INV[k] > 0);
+        INV[pick]--;
+        gu.stealCd = GULL_STEAL_CD;
+        learn('gull', 'gulls snatch food you carry carelessly');
+        toast('\u{1F54A} a gull snatches your ' + pick + ' away');
+      }
+      /* dive-bomb: 3 s screaming tell, then it rakes your head */
+      if (gu.diveTell > 0) {
+        gu.diveTell -= dt;
+        speed = 0;
+        if (gu.diveTell <= 0) {
+          stats.health = Math.max(0, stats.health - GULL_DIVE_DMG);
+          gullDiveCd = GULL_DIVE_CD;
+          toast('\u{1F54A} a gull rakes your head with its talons');
+          checkDeath();
+        }
+      } else if (gullDiveCd <= 0 && Math.hypot(px - gu.x, pz - gu.z) < GULL_DIVE_R) {
+        gu.diveTell = GULL_DIVE_TELL;
+        toast('gulls are screaming overhead \u2014 they dive at heads');
+      }
+      /* water scare: while the player is in the water the flock drifts
+         inland (shark tell — M15); the journal entry is one-time */
+      if (inWater) {
+        gullWaterT = 8;
+        if (!learned.has('gullscare'))
+          learn('gullscare', 'the gulls scream and pull inland \u2014 something is in the water');
+      }
+    }
+    if (speed > 0) {
+      const nx = gu.x + Math.sin(dir) * speed * dt;
+      const nz = gu.z + Math.cos(dir) * speed * dt;
+      if (heightAt(nx, nz) >= 0.3) { gu.x = nx; gu.z = nz; }
+    }
+    gu.dir = dir;
+    gu.grp.position.set(gu.x, heightAt(gu.x, gu.z) + GULL_ALT, gu.z);
+    gu.grp.rotation.y = dir;
+    const flap = speed > 0 ? Math.sin(runT * 16 + gu.phase) * 0.5 : 0.1;
+    gu.wingL.rotation.z = flap;
+    gu.wingR.rotation.z = -flap;
   }
 }
 
@@ -1301,6 +1487,8 @@ function contextHint() {
     return 'X \u2014 spear the school';
   if (dayFactor < 0.25 && tigers.some((t) => Math.hypot(t.x - x, t.z - z) < 20))
     return '\u{1F981} you can see eyes in the dark \u2014 fire and torchlight drive tigers off';
+  if (dayFactor < 0.5 && !campIsLit() && !nearFire(x, z, 10))
+    return '\u{1F981} night is coming \u2014 light a fire (G) or your camp torch (N)';
   if (!spear) return 'B \u2014 make a spear   \u00B7   G \u2014 make a fire   \u00B7   C/F/V \u2014 eat coconut/fish/crab';
   return 'coconuts under palms \u00B7 fish in the shallows \u00B7 crabs on the beach';
 }
@@ -1462,6 +1650,7 @@ function frame(t) {
 
   updateSky(dt);
   updateTigers(dt);   /* after updateSky so dayFactor is fresh this frame */
+  updateGulls(dt);
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   updateCamera();
   renderer.render(scene, camera);

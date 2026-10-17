@@ -47,6 +47,7 @@ patched += `
 {
   let __tt = 1000;
   const pump = (n) => { for (let i = 0; i < n; i++) { const cb = __rafCb; __rafCb = null; __tt += 16.7; if (cb) cb(__tt); } };
+  firstNight = true;   // M6: suppress the scripted beat; its dedicated M6 block re-arms it
   pump(5); // one clean frame before asserting
 
   // deterministic island: center is land, edges are sea
@@ -88,7 +89,7 @@ patched += `
   // world placements are seeded
   if (schools.length !== 5) throw new Error('expected 5 fish schools: ' + schools.length);
   if (schools.some((s) => s.n < 8 || s.n > 13)) throw new Error('fish school size out of band');
-  if (crabs.length !== 6) throw new Error('expected 6 crabs: ' + crabs.length);
+  if (crabs.length !== 9) throw new Error('expected 9 crabs (6 beach + 3 M6 extras): ' + crabs.length);
 
   // stats tick down in real time; clock advances
   const th0 = stats.thirst, hu0 = stats.hunger, gm0 = gameMin;
@@ -396,6 +397,121 @@ patched += `
   setClockP(0.33); pump(1200);
   if (T.state !== 'hide') throw new Error('day tiger should hide: ' + T.state);
   if (Math.hypot(T.x - T.hx, T.z - T.hz) > 1.5) throw new Error('day tiger should be at home');
+
+  /* ---- M6: night-1 encounter (gulls, night crabs, first-night tiger beat) ---- */
+
+  // reset state that M0‒M5 left behind
+  gameMin = 0;
+  stats.health = 100; stats.thirst = 100; stats.hunger = 100;
+  INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
+  firstNight = true;   // suppress the scripted beat until its dedicated test
+
+  // populations: 5 gulls in the beach/grass band; 6 beach + 3 extra crabs
+  if (gulls.length !== 5) throw new Error('expected 5 gulls: ' + gulls.length);
+  if (gulls.some((g) => heightAt(g.hx, g.hz) < 0.3 || heightAt(g.hx, g.hz) > 6))
+    throw new Error('gull home outside the beach/grass band');
+  if (crabs.length !== 9) throw new Error('expected 6 + 3 extra crabs: ' + crabs.length);
+
+  // day: every gull is airborne and moving (hover-wander around home)
+  rig.position.set(spawn.x, Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25), spawn.z);
+  setClockP(0.33); pump(10);
+  const g0 = gulls.map((g) => ({ x: g.x, z: g.z }));
+  pump(90);
+  gulls.forEach((g, i) => {
+    if (Math.hypot(g.x - g0[i].x, g.z - g0[i].z) < 0.1)
+      throw new Error('day gull should be flying: ' + i);
+  });
+
+  // steal: exactly one carried food item, per-gull cooldown, learn entry
+  const G = gulls[0];
+  rig.position.set(G.hx, Math.max(heightAt(G.hx, G.hz), WATER - 0.25), G.hz);
+  G.x = G.hx; G.z = G.hz;
+  INV.coconut = 2;
+  gulls.forEach((g) => { g.stealCd = (g === G) ? 0 : 99; g.diveTell = 0; });
+  gullDiveCd = 60;
+  pump(10);
+  if (INV.coconut !== 1) throw new Error('gull should have stolen exactly one coconut: ' + INV.coconut);
+  if (!learned.has('gull')) throw new Error('gull learn entry missing');
+
+  // dive-bomb: telegraphed swoop rakes the head for exactly -8 HP (regen off)
+  stats.health = 100; stats.thirst = 5; stats.hunger = 5;
+  INV.coconut = 0;
+  G.diveTell = 3;
+  gullDiveCd = 60;
+  pump(190);
+  if (stats.health !== 92) throw new Error('dive-bomb should cost exactly 8 HP: ' + stats.health);
+
+  // water scare: gulls scream and drift inland, one-time learn entry
+  let swx = 0, swz = 0, foundW = false;
+  for (let r = 2; r <= 20 && !foundW; r += 2) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const x = spawn.x + Math.cos(a) * r, z = spawn.z + Math.sin(a) * r;
+      if (heightAt(x, z) >= 0 && heightAt(x, z) < 0.5) { swx = x; swz = z; foundW = true; break; }
+    }
+  }
+  if (!foundW) throw new Error('no shallows found near spawn for the water tell');
+  rig.position.set(swx, Math.max(heightAt(swx, swz), WATER - 0.25), swz);
+  setClockP(0.33); pump(30);
+  if (!learned.has('gullscare')) throw new Error('gullscare learn entry missing');
+  if (gullWaterT <= 0) throw new Error('gulls should be drifting inland after the water scare');
+
+  // night: gulls fly home and perch still (mirrors the tiger's hide)
+  rig.position.set(spawn.x, Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25), spawn.z);
+  setClockP(0.85); pump(20);
+  gulls.forEach((g) => {
+    const l = Math.hypot(g.hx, g.hz) || 1;
+    g.x -= (g.hx / l) * 3; g.z -= (g.hz / l) * 3;   // 3 m toward the island center (landward)
+  });
+  pump(240);
+  if (!gulls.every((g) => Math.hypot(g.x - g.hx, g.z - g.hz) < 1))
+    throw new Error('night gulls should perch at home');
+
+  // crabs are bolder at night: path length over equal time is higher
+  const crabPath = (frames) => {
+    let s = 0;
+    for (let i = 0; i < frames; i++) {
+      const pre = crabs.map((c) => ({ x: c.x, z: c.z }));
+      const cb = __rafCb; __rafCb = null; __tt += 16.7; if (cb) cb(__tt);
+      s += crabs.reduce((a, c, i2) => a + Math.hypot(c.x - pre[i2].x, c.z - pre[i2].z), 0);
+    }
+    return s;
+  };
+  setClockP(0.33); pump(10);
+  const dayPath = crabPath(120);
+  setClockP(0.85); pump(10);
+  const nightPath = crabPath(120);
+  if (!(nightPath > dayPath * 1.4))
+    throw new Error('night crabs should move faster: ' + nightPath + ' vs ' + dayPath);
+
+  // scripted first-night beat: re-arm, park on dry ground clear of fire,
+  // let night fall — the nearest tiger closes, the strike lands, fire burns it off
+  firstNight = false;
+  stats.health = 100; stats.thirst = 5; stats.hunger = 5;
+  let bx = spawn.x, bz = spawn.z;
+  outer: for (let r = 4; r <= 18; r += 2) {
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2;
+      const x = spawn.x + Math.cos(a) * r, z = spawn.z + Math.sin(a) * r;
+      if (heightAt(x, z) >= 0.5 && nearestFire(x, z).d > 14 &&
+          Math.hypot(x - camp.x, z - camp.z) > 12) { bx = x; bz = z; break outer; }
+    }
+  }
+  rig.position.set(bx, Math.max(heightAt(bx, bz), WATER - 0.25), bz);
+  setClockP(0.85); pump(1);
+  const TN = tigers.reduce((a, b) =>
+    Math.hypot(a.hx - camp.x, a.hz - camp.z) < Math.hypot(b.hx - camp.x, b.hz - camp.z) ? a : b);
+  const beatD = Math.hypot(TN.x - rig.position.x, TN.z - rig.position.z);
+  if (beatD > 15) throw new Error('first-night beat should place the tiger ~13 m away: ' + beatD.toFixed(1));
+  pump(240);
+  const struck = stats.health < 100;
+  const closed = Math.hypot(TN.x - rig.position.x, TN.z - rig.position.z) < 14;
+  if (!struck && !closed) throw new Error('first-night tiger should close in: ' + TN.state + ' hp=' + stats.health);
+  actFire();
+  pump(30);
+  if (TN.state !== 'flee') throw new Error('tiger should flee the new fire: ' + TN.state);
+  pump(150);
+  if (nearFire(TN.x, TN.z, 10)) throw new Error('tiger should have retreated from the fire');
 }
 `;
 const file = join(here, '.game-smoke.mjs');
