@@ -949,6 +949,218 @@ patched += `
 
   // leave a clean state
   setWeatherDebug('clear'); pump(2);
+
+  /* ---- M11: storm gameplay + weather/survival interaction ---- */
+
+  // 1. schedule: a storm exists in the first 40000 game minutes, its events
+  //    are precomputed on the per-segment stream and replay exactly
+  weatherExtend(40000);
+  const si = weather.segs.findIndex((s) => s.state === 'storm');
+  if (si < 0) throw new Error('no storm segment in the first 40000 game minutes');
+  const seg = weather.segs[si];
+  {
+    if (weather.segs[0].evs.length !== 0) throw new Error('a non-storm segment must have no events');
+    const evR = mulberry32(SEED + WEATHER_SEED_EVENTS + si * 7);
+    const nS = 1 + Math.floor(evR() * 3);
+    const rep = [];
+    for (let k = 0; k < nS; k++) {
+      const t = seg.start + evR() * (seg.end - seg.start);
+      const a = evR() * Math.PI * 2;
+      const r = Math.sqrt(evR()) * ISLAND_R * 0.7;
+      rep.push({ kind: 'strike', t, x: Math.cos(a) * r, z: Math.sin(a) * r });
+    }
+    const nD = 1 + Math.floor(evR() * 2);
+    for (let k = 0; k < nD; k++)
+      rep.push({ kind: 'drop', t: seg.start + evR() * (seg.end - seg.start), pi: Math.floor(evR() * palms.length) });
+    rep.sort((u, v) => u.t - v.t);
+    if (rep.length !== seg.evs.length) throw new Error('storm event count mismatch: ' + rep.length + ' vs ' + seg.evs.length);
+    for (let i = 0; i < rep.length; i++) {
+      const a = rep[i], b = seg.evs[i];
+      if (a.kind !== b.kind || Math.abs(a.t - b.t) > 1e-9)
+        throw new Error('storm event ' + i + ' replay mismatch: ' + JSON.stringify(a) + ' vs ' + JSON.stringify(b));
+      if (a.kind === 'strike' && (Math.abs(a.x - b.x) > 1e-9 || Math.abs(a.z - b.z) > 1e-9))
+        throw new Error('storm event ' + i + ' strike position mismatch');
+      if (a.kind === 'drop' && a.pi !== b.pi) throw new Error('storm event ' + i + ' drop palm mismatch');
+    }
+    for (const ev of seg.evs)
+      if (ev.t < seg.start - 1e-9 || ev.t > seg.end + 1e-9) throw new Error('storm event outside its segment: ' + ev.t);
+  }
+
+  // shared dry ground far from camp for the lightning + wet tests
+  const pp = palms.find((p) => p.h >= 0.5 && Math.hypot(p.x - camp.x, p.z - camp.z) > 16 && !nearFire(p.x, p.z, 8));
+  if (!pp) throw new Error('no dry point far from camp for M11');
+  let p2x = NaN, p2z = NaN;
+  for (let k = 0; k < 720; k++) {
+    const a = (k / 720) * Math.PI * 2;
+    const x = pp.x + Math.cos(a) * 11, z = pp.z + Math.sin(a) * 11;
+    if (heightAt(x, z) >= 0.5) { p2x = x; p2z = z; break; }
+  }
+  if (isNaN(p2x)) throw new Error('no dry point 11u from the lightning palm');
+  const ux = (p2x - pp.x) / 11, uz = (p2z - pp.z) / 11;
+  const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+
+  // 2. dropCoconut: crown decrements, a falling item starts at the crown
+  {
+    const p0 = palms.find((p) => p.cocos > 0);
+    if (!p0) throw new Error('no palm with coconuts for M11');
+    const c0 = p0.cocos, nI = items.length;
+    dropCoconut(p0);
+    if (p0.cocos !== c0 - 1) throw new Error('dropCoconut should decrement the crown');
+    if (items.length !== nI + 1) throw new Error('dropCoconut should add a falling item');
+    const it = items[items.length - 1];
+    if (it.state !== 'fall') throw new Error('a wind-dropped coconut should be falling');
+    if (Math.hypot(it.x - p0.top[0], it.z - p0.top[2]) > 1) throw new Error('the dropped coconut should start at the crown');
+  }
+
+  // 3. doLightning: ignites on open ground, panics animals, sears the open player
+  {
+    park(p2x, p2z);
+    const hp0 = stats.health;
+    const nF = fires.length;
+    if (nF >= 5) throw new Error('unexpected fire count before M11 lightning: ' + nF);
+    const crabNear = crabs.find((c) => c.alive && Math.hypot(c.x - pp.x, c.z - pp.z) < 25);
+    doLightning(pp.x, pp.z);
+    if (fires.length !== nF + 1) throw new Error('lightning should ignite a fire on open ground: ' + fires.length);
+    if (stormBoltT <= 0) throw new Error('lightning should raise the bolt');
+    if (tigers[0].panicT <= 0) throw new Error('lightning should panic the tigers');
+    if (gullPanicT <= 0) throw new Error('lightning should quiet the gulls');
+    if (stats.health !== hp0) throw new Error('a strike 11u away must not sear the player');
+    if (crabNear && crabNear.fleeT <= 0) throw new Error('a nearby crab should scuttle from the strike');
+
+    // 2.75u from the strike: inside STRIKE_HIT_R but outside FIRE_DRY_R
+    stats.health = 90;
+    park(p2x - ux * 2.75, p2z - uz * 2.75);
+    doLightning(p2x, p2z);
+    if (stats.health !== 90 - STRIKE_DMG)
+      throw new Error('an unsheltered strike should sear for STRIKE_DMG: ' + stats.health);
+    if (!learned.has('lightning')) throw new Error('a sear should teach the lightning rule');
+    park(p2x, p2z);
+  }
+
+  // 4. event machinery: a natural storm fires its precomputed events lazily
+  setWeatherDebug(null);
+  gameMin = seg.evs[0].t;
+  {
+    // park far from every strike so the catch-up cannot sear the player
+    let cx = spawn.x, cz = spawn.z, best = -1;
+    for (let k = 0; k < 600; k++) {
+      const a = k * 0.35, r = 10 + (k % 7) * 12;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (heightAt(x, z) < 0.5) continue;
+      let mn = Infinity;
+      for (const ev of seg.evs) if (ev.kind === 'strike') mn = Math.min(mn, Math.hypot(x - ev.x, z - ev.z));
+      if (mn > best) { best = mn; cx = x; cz = z; }
+    }
+    rig.position.set(cx, heightAt(cx, cz), cz);
+  }
+  pump(2);
+  {
+    const due = seg.evs.filter((e) => e.t <= gameMin).length;
+    const done = seg.evs.filter((e) => e.done).length;
+    if (seg.evs[0].done !== true) throw new Error('the first due event should have fired');
+    if (done !== due) throw new Error('catch-up should fire exactly the due events: ' + done + ' vs ' + due);
+  }
+  setWeatherDebug('clear');
+
+  // 5. storm visuals: dark sky, wind streaks, closed fog, HUD, bolt
+  setClockP(((0.33 - gameMin / 1800) % 1 + 1) % 1);
+  pump(2);
+  const bSun = sun.intensity, bFog = scene.fog.far;
+  if (bSun <= 0) throw new Error('need a daytime sun baseline for the storm: ' + bSun);
+  setWeatherDebug('storm');
+  pump(60);
+  if (rainGrp.visible !== true) throw new Error('a storm should show rain streaks');
+  if (scene.fog.far >= bFog - 60) throw new Error('a storm should close the fog: ' + scene.fog.far);
+  if (sun.intensity >= bSun * 0.35) throw new Error('a storm should dim the sun: ' + sun.intensity);
+  if (!hudText.includes('storm')) throw new Error('HUD should name the storm: ' + hudText);
+  if (!bolt || typeof bolt.visible !== 'boolean') throw new Error('the lightning bolt should exist');
+  setWeatherDebug('clear');
+  pump(60);
+  if (scene.fog.far < bFog - 30) throw new Error('fog should reopen when clear: ' + scene.fog.far);
+  if (!hudText.includes('clear')) throw new Error('HUD should show clear weather');
+
+  // 6. wet stat: rain soaks an exposed player, shelter dries them off
+  {
+    let wx = NaN, wz = NaN, wb = -1;
+    for (let k = 0; k < 600; k++) {
+      const a = k * 0.35, r = 10 + (k % 7) * 12;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (heightAt(x, z) < 0.5) continue;
+      if (Math.hypot(x - camp.x, z - camp.z) < 10) continue;   /* keep the shelter/torch dry off */
+      if (Math.hypot(x - pp.x, z - pp.z) < 6) continue;
+      let mn = Infinity;
+      for (const ev of seg.evs) if (ev.kind === 'strike') mn = Math.min(mn, Math.hypot(x - ev.x, z - ev.z));
+      if (mn > wb) { wb = mn; wx = x; wz = z; }
+    }
+    if (isNaN(wx)) throw new Error('no safe dry point for the wet test');
+    park(wx, wz);
+    stats.thirst = stats.hunger = 100;
+    stats.wet = 100;
+    const hp0 = stats.health;
+    setWeatherDebug('rain');
+    pump(300);
+    if (stats.wet < 90) throw new Error('rain should hold the soak: ' + stats.wet);
+    if (stats.health >= hp0 - 1.5) throw new Error('soaking should drain health: ' + stats.health + ' vs ' + hp0);
+    if (!learned.has('wet')) throw new Error('the soak should teach the wet rule');
+
+    rig.position.set(shel.position.x, Math.max(heightAt(shel.position.x, shel.position.z), WATER - 0.25), shel.position.z);
+    setWeatherDebug('rain');
+    pump(600);
+    if (stats.wet >= 25) throw new Error('shelter should dry you off: ' + stats.wet);
+    setWeatherDebug('clear');
+    pump(600);
+    if (stats.wet !== 0) throw new Error('clear weather should finish drying: ' + stats.wet);
+  }
+
+  // 7. lagoon surge: the storm refuses the spear, clear weather still fishes
+  setWeatherDebug('storm');
+  {
+    const s = schools.find((sc) => sc.n > 0);
+    if (!s) throw new Error('no fish school for the lagoon test');
+    rig.position.set(s.x, Math.max(heightAt(s.x, s.z), WATER - 0.25), s.z);
+    const fr = INV.fishRaw;
+    actStrike();
+    if (INV.fishRaw !== fr) throw new Error('the storm should refuse the spear');
+    if (!learned.has('lagoon')) throw new Error('the surge should teach the lagoon rule');
+    setWeatherDebug('clear');
+    actStrike();
+    if (INV.fishRaw !== fr + 1) throw new Error('clear weather should still fish: ' + INV.fishRaw);
+  }
+
+  // 8. rain masks fire and smoke: tigers fear fires less in wet weather
+  setClockP(((0.9 - gameMin / 1800) % 1 + 1) % 1);
+  pump(2);
+  {
+    let tx = NaN, tz = NaN;
+    for (let k = 0; k < 720; k++) {
+      const a = (k / 720) * Math.PI * 2;
+      const x = shel.position.x + Math.cos(a) * 8, z = shel.position.z + Math.sin(a) * 8;
+      if (heightAt(x, z) >= 0.5 && Math.hypot(x + 8 - shel.position.x, z - shel.position.z) > 12) {
+        tx = x; tz = z; break;
+      }
+    }
+    if (isNaN(tx)) throw new Error('no ground for the tiger fire test');
+    const tf = makeFire(tx, heightAt(tx, tz), tz);
+    for (const t of tigers) t.panicT = 0;
+    const t0 = tigers[0];
+    setWeatherDebug('clear');
+    t0.state = 'patrol'; t0.x = tx + 8; t0.z = tz;
+    pump(2);
+    if (t0.state !== 'flee') throw new Error('clear night: 8u from a fire should put the tiger to flight: ' + t0.state);
+    setWeatherDebug('rain');
+    t0.state = 'patrol'; t0.x = tx + 8; t0.z = tz;
+    pump(2);
+    if (t0.state === 'flee') throw new Error('rain masks the fire: 8u should not scare the tiger');
+    scene.remove(tf.grp);   /* may already be doused by the rain above; both are idempotent here */
+    const tfi = fires.indexOf(tf);
+    if (tfi >= 0) fires.splice(tfi, 1);
+    t0.x = t0.hx; t0.z = t0.hz; t0.state = 'hide'; t0.panicT = 0;
+    setClockP(((0.33 - gameMin / 1800) % 1 + 1) % 1);
+  }
+
+  // leave a clean state (M11)
+  setWeatherDebug('clear');
+  stats.wet = 0;
 }
 `;
 const file = join(here, '.game-smoke.mjs');

@@ -706,7 +706,7 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 /* ---------------- survival: stats, inventory, journal ---------------- */
 
-const stats = { thirst: 100, hunger: 100, health: 100 };
+const stats = { thirst: 100, hunger: 100, health: 100, wet: 0 };   /* M11: wet (rain/cold) */
 const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0,
               sweetpotato: 0, sweetpotatoCooked: 0, yam: 0, yamCooked: 0, banana: 0, wildberry: 0,
               poisonberry: 0, poisonfern: 0, poisonyam: 0, herb: 0 };
@@ -850,8 +850,13 @@ function updateSchools(dt) {
     let ox = Math.sin(runT * 0.07 + s.phase) * 9;
     let oz = Math.cos(runT * 0.09 + s.phase * 1.7) * 7;
     let sc = 1;
-    while (sc > 0.15 && heightAt(s.bx + ox * sc, s.bz + oz * sc) > -0.3) sc -= 0.2;
-    const tx = s.bx + ox * sc, tz = s.bz + oz * sc;
+    const minW = weather.forced === 'storm' || weatherStateAt(gameMin) === 'storm' ? -0.8 : -0.3;
+    while (sc > 0.15 && heightAt(s.bx + ox * sc, s.bz + oz * sc) > minW) sc -= 0.2;
+    let tx = s.bx + ox * sc, tz = s.bz + oz * sc;
+    if (minW < -0.3) {   /* M11: lagoon surge ‒ the fish leave the shallows (visual displacement) */
+      const dl = Math.hypot(tx, tz) || 1;
+      tx += (tx / dl) * 6; tz += (tz / dl) * 6;
+    }
     s.x += (tx - s.x) * Math.min(1, dt * 0.9);
     s.z += (tz - s.z) * Math.min(1, dt * 0.9);
     s.mesh.count = s.n;
@@ -1005,7 +1010,8 @@ const tigers = [];
       tigers.some((t) => Math.hypot(t.hx - x, t.hz - z) < 60)));
     const m = buildTigerMesh(x, heightAt(x, z), z);
     tigers.push({ x, z, hx: x, hz: z, state: 'hide', dir: rng() * Math.PI * 2,
-                  phase: rng() * 100, atkCd: 0, grp: m.grp, legs: m.legs });
+                  phase: rng() * 100, atkCd: 0, panicT: 0, panicX: 0, panicZ: 0,
+                  grp: m.grp, legs: m.legs });
   }
 }
 
@@ -1068,13 +1074,22 @@ function updateTigers(dt) {
     if (!active) {
       /* day: return to home and hide */
       t.state = 'hide';
+      if (t.panicT > 0) t.panicT -= dt;   /* don't let a panic linger into the day */
       const dh = Math.hypot(t.hx - t.x, t.hz - t.z);
       if (dh > 0.3) { dir = Math.atan2(t.hx - t.x, t.hz - t.z); speed = TIG_SPEED.patrol; }
     } else {
       const nf = nearestFire(t.x, t.z);
+      /* M11: rain masks fire and smoke, so tigers fear fires less in wet weather */
+      const faR = isWetSt(effectiveWeather()) ? FIRE_AVOID_R * 0.6 : FIRE_AVOID_R;
+      /* M11: a lightning strike panics the tiger and drives it from the spot */
+      if (t.panicT > 0) {
+        t.panicT -= dt;
+        t.state = 'flee';
+        dir = Math.atan2(t.x - t.panicX, t.z - t.panicZ);
+        speed = TIG_SPEED.flee;
       /* flee is sticky: it ends only past the margin, so a tiger can't
          hover on the 10m ring while the player stands by the fire */
-      if (nf.d < FIRE_AVOID_R || (t.state === 'flee' && nf.d < TIG_FLEE_END_R)) {
+      } else if (nf.d < faR || (t.state === 'flee' && nf.d < TIG_FLEE_END_R)) {
         /* fire drives the tiger off ‒ takes priority over everything */
         t.state = 'flee';
         dir = Math.atan2(t.x - nf.x, t.z - nf.z);
@@ -1192,18 +1207,25 @@ const gulls = [];
 
 let gullDiveCd = 0;    /* global dive-bomb cooldown */
 let gullWaterT = 0;    /* seconds left of the "something is in the water" inland drift */
+let gullPanicT = 0;    /* M11: seconds of storm-quiet left (set by a lightning strike) */
 function updateGulls(dt) {
   if (!started || dead) return;
   const px = rig.position.x, pz = rig.position.z;
   const inWater = heightAt(px, pz) < 0.5;
   gullDiveCd = Math.max(0, gullDiveCd - dt);
   gullWaterT = Math.max(0, gullWaterT - dt);
+  gullPanicT = Math.max(0, gullPanicT - dt);
   const carrying = GULL_FOOD_ORDER.some((k) => INV[k] > 0);
+  const stormQuiet = effectiveWeather() === 'storm' || gullPanicT > 0;   /* M11 */
   for (const gu of gulls) {
     if (gu.stealCd > 0) gu.stealCd -= dt;
     let dir = gu.dir, speed = 0;
     if (dayFactor < 0.5) {
       /* night: fly home and perch still (the tiger's "hide" pattern) */
+      const dh = Math.hypot(gu.hx - gu.x, gu.hz - gu.z);
+      if (dh > 0.3) { dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z); speed = GULL_SPEED * 0.8; }
+    } else if (stormQuiet) {
+      /* M11: the flock goes quiet in a storm ‒ home to perch, no steal, no dive */
       const dh = Math.hypot(gu.hx - gu.x, gu.hz - gu.z);
       if (dh > 0.3) { dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z); speed = GULL_SPEED * 0.8; }
     } else {
@@ -1525,12 +1547,7 @@ function actUse() {
   /* 4. shake a palm */
   const p = palms.find((p) => p.cocos > 0 && Math.hypot(p.x - x, p.z - z) < 3.5);
   if (p) {
-    p.cocos--;
-    setM(p.idx * 2 + p.cocos, cocosMesh, 9999, -99, 9999, 0, 0, 0, 0, 0, 0);
-    const mesh = new THREE.Mesh(itemGeo, itemMat);
-    scene.add(mesh);
-    items.push({ x: p.top[0] + 0.18, y: p.top[1] - 0.18, z: p.top[2] + 0.1,
-                 vy: 0, state: 'fall', mesh, taken: false });
+    dropCoconut(p);   /* M11: shared with the storm wind */
     learn('coco', 'coconuts: shake the palm, eat when you are thirsty');
     toast('\u{1F965} a coconut tumbles down');
     return;
@@ -1574,6 +1591,11 @@ function actStrike() {
   if (strikeCd > 0) return;
   const { x, z, h } = playerPos();
   if (h > 0.6) { toast('you need the shallows for fish'); return; }
+  if (effectiveWeather() === 'storm') {   /* M11: lagoon surge */
+    learn('lagoon', 'in a storm the lagoon surges and the fish leave the shallows');
+    toast('the lagoon surges \u2014 the fish are gone from the shallows');
+    return;
+  }
   let best = null, bd = 5;
   for (const s of schools) {
     if (s.n <= 0) continue;
@@ -1680,6 +1702,7 @@ function actSleep() {
   const realSec = (dp * 1800) / 1.2;          /* night-rate real seconds the night would have taken */
   stats.thirst = Math.max(0, stats.thirst - THIRST_RATE * realSec * 0.5);   /* resting: half rate */
   stats.hunger = Math.max(0, stats.hunger - HUNGER_RATE * realSec * 0.5);
+  stats.wet = 0;   /* M11: sleep under the shelter dries you off */
   stats.health = Math.min(100, stats.health + 30);   /* rest restores, not full */
   const o = campOffsets('bed');
   rig.position.set(o.x, Math.max(heightAt(o.x, o.z), WATER - 0.25), o.z);
@@ -1795,6 +1818,7 @@ function respawn() {
   dead = false;
   deadEl.style.display = 'none';
   stats.thirst = stats.hunger = stats.health = 100;
+  stats.wet = 0;
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
   INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
   INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
@@ -1819,6 +1843,8 @@ function contextHint() {
   const threat = tigers.find((t) => (t.state === 'stalk' || t.state === 'chase') &&
     Math.hypot(t.x - x, t.z - z) < 12);
   if (threat) return '\u{1F981} a tiger is closing \u2014 SPRINT or stand in a lit fire (G)';
+  if (effectiveWeather() === 'storm' && stats.wet > 40 && !isDryNow())
+    return 'the storm is soaking you \u2014 shelter or fire will dry you';
   if (infectedWound) return '\u2620\uFE0F your wounds fester \u2014 M uses a healing herb (' + INV.herb + ')';
   if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - x, i.z - z) < 1.6))
     return 'E \u2014 pick up the coconut';
@@ -1875,20 +1901,32 @@ function updateItems(dt) {
    setClockP/?t= (which only touch p0), T-key skips, actSleep jumps, and
    rewinds. M11 appends 'storm' to WEATHER_STATES + WEATHER_NEXT. */
 const WEATHER_SEED_OFFSET = 271;   /* private stream; world uses SEED, plants 101..1193 */
-const WEATHER_STATES = ['clear', 'cloudy', 'rain'];
-const WEATHER_DUR = { clear: [240, 720], cloudy: [120, 360], rain: [60, 180] };
+const WEATHER_SEED_EVENTS = 273;   /* per-storm-segment event stream (SEED + 273 + i*7) */
+const WEATHER_STATES = ['clear', 'cloudy', 'rain', 'storm'];
+const WEATHER_DUR = { clear: [240, 720], cloudy: [120, 360], rain: [60, 180], storm: [45, 150] };
 const WEATHER_NEXT = {   /* [state, weight] transition table (data-driven) */
   clear:  [['cloudy', 0.7], ['clear', 0.3]],
   cloudy: [['rain', 0.5], ['clear', 0.4], ['cloudy', 0.1]],
-  rain:   [['cloudy', 0.7], ['clear', 0.3]],
+  rain:   [['cloudy', 0.5], ['storm', 0.2], ['clear', 0.3]],
+  storm:  [['rain', 0.6], ['cloudy', 0.4]],   /* a storm only follows rain */
 };
 const RAIN_GROWTH = 1.5;        /* rain accelerates plant growth (M7 hook) */
 const SHELTER_PROTECT_R = 2.0;  /* fires this close to the shelter survive rain */
+const STRIKE_HIT_R = 3.0;       /* M11: lightning sears you within this radius (in the open) */
+const STRIKE_DMG = 15;          /* M11: hp per strike */
+const RAIN_WET_RATE = 3;        /* M11: wet/s out in the rain */
+const STORM_WET_RATE = 5;       /* M11: wet/s out in a storm */
+const DRY_RATE = 2;             /* M11: wet/s drying off in dry weather, in the open */
+const DRY_RATE_WARM = 8;        /* M11: wet/s drying by shelter or a nearby fire */
+const WET_DRAIN = 0.8;          /* M11: hp/s at full soak ‒ pressure, not a death spiral */
+const FIRE_DRY_R = 2.5;         /* M11: a lit fire this close dries you off */
 const WEATHER_SKY_CLOUDY = new THREE.Color(0x8d99a6);
 const WEATHER_SKY_RAIN = new THREE.Color(0x5f6b7a);
+const WEATHER_SKY_STORM = new THREE.Color(0x39424f);
+const WEATHER_SKY_FLASH = new THREE.Color(0xdfe8f2);
 let weatherRng = mulberry32(SEED + WEATHER_SEED_OFFSET);
 const weather = { segs: [], forced: null, lastState: 'clear', lastMin: 0,
-                  vis: { cloudy: 0, rain: 0 } };
+                  vis: { cloudy: 0, rain: 0, storm: 0 } };
 function weatherDur(state) {
   const [mn, mx] = WEATHER_DUR[state];
   return mn + weatherRng() * (mx - mn);
@@ -1900,20 +1938,42 @@ function weatherPick(prev) {
   for (const [st, w] of opts) { acc += w; if (r < acc) return st; }
   return opts[opts.length - 1][0];
 }
-weather.segs.push({ state: 'clear', start: 0, end: weatherDur('clear') });
+weather.segs.push({ state: 'clear', start: 0, end: weatherDur('clear'), evs: [] });
 function weatherExtend(min) {   /* lazy: one-time cost even for huge jumps */
   while (weather.segs[weather.segs.length - 1].end <= min) {
     const last = weather.segs[weather.segs.length - 1];
     const st = weatherPick(last.state);
-    weather.segs.push({ state: st, start: last.end, end: last.end + weatherDur(st) });
+    const start = last.end, end = start + weatherDur(st);
+    const seg = { state: st, start, end, evs: [] };
+    if (st === 'storm') {
+      /* M11: precompute this storm's events on its own private stream with a
+         fixed draw order (all strikes' t/a/r, then all drops' t/pi) so the
+         smoke test can replay every value exactly. */
+      const i = weather.segs.length;
+      const evR = mulberry32(SEED + WEATHER_SEED_EVENTS + i * 7);
+      const nS = 1 + Math.floor(evR() * 3);   /* 1..3 strikes */
+      for (let k = 0; k < nS; k++) {
+        const t = start + evR() * (end - start);
+        const a = evR() * Math.PI * 2;
+        const r = Math.sqrt(evR()) * ISLAND_R * 0.7;
+        seg.evs.push({ kind: 'strike', t, x: Math.cos(a) * r, z: Math.sin(a) * r });
+      }
+      const nD = 1 + Math.floor(evR() * 2);   /* 1..2 wind drops */
+      for (let k = 0; k < nD; k++)
+        seg.evs.push({ kind: 'drop', t: start + evR() * (end - start), pi: Math.floor(evR() * palms.length) });
+      seg.evs.sort((u, v) => u.t - v.t);
+      for (const ev of seg.evs) ev.done = false;
+    }
+    weather.segs.push(seg);
   }
 }
-function weatherStateAt(min) {  /* pure lookup: rewinds are harmless */
+function weatherSegAt(min) {    /* pure lookup: rewinds are harmless */
   weatherExtend(min);
   let i = weather.segs.length - 1;
   while (weather.segs[i].start > min) i--;
-  return weather.segs[i].state;
+  return weather.segs[i];
 }
+function weatherStateAt(min) { return weatherSegAt(min).state; }
 function rainFrac(minA, minB) { /* fraction of [minA,minB] spent in rain */
   if (minB <= minA) return 0;
   weatherExtend(minB);
@@ -1921,7 +1981,8 @@ function rainFrac(minA, minB) { /* fraction of [minA,minB] spent in rain */
   while (i >= 0 && weather.segs[i].start < minB) {
     const s = weather.segs[i];
     if (s.end <= minA) break;
-    if (s.state === 'rain') total += Math.min(s.end, minB) - Math.max(s.start, minA);
+    if (s.state === 'rain' || s.state === 'storm')   /* a storm is heavy rain */
+      total += Math.min(s.end, minB) - Math.max(s.start, minA);
     i--;
   }
   return total / (minB - minA);
@@ -1943,20 +2004,89 @@ function douseUnshelteredFires() {
   }
   if (n) toast('\u{1F327} the rain doused your fire' + (n > 1 ? 's' : ''));
 }
+function isWetSt(st) { return st === 'rain' || st === 'storm'; }   /* dousing, growth, soaking */
+function effectiveWeather() { return weather.forced || weatherStateAt(gameMin); }
+
+/* M11: lightning flash + one shared bolt (stub-safe: a thin box) */
+let stormFlash = 0, stormBoltT = 0;
+const bolt = new THREE.Mesh(
+  new THREE.BoxGeometry(0.1, 40, 0.1),
+  new THREE.MeshBasicMaterial({ color: 0xeef6ff }));
+bolt.visible = false;
+scene.add(bolt);
+
+function isDryNow() {   /* shelter or a nearby lit fire keeps you dry */
+  const { x, z } = playerPos();
+  const S = camp && camp.structures.shelter ? camp.structures.shelter.position : null;
+  return (S && Math.hypot(x - S.x, z - S.z) < SHELTER_PROTECT_R) || nearFire(x, z, FIRE_DRY_R);
+}
+function doLightning(x, z) {   /* M11: a strike lands on the island */
+  stormFlash = 1;
+  stormBoltT = 0.35;
+  bolt.position.set(x, heightAt(x, z) + 20, z);
+  /* ignites an uncontrolled fire on open ground (cap respected; fires never die) */
+  const g = heightAt(x, z);
+  if (g >= 0.5 && fires.length < 5) { makeFire(x, g, z); toast('\u26A1 lightning sets a fire'); }
+  /* sears anything in the open within radius ‒ shelter and fire are fair cover */
+  const { x: rx, z: rz } = playerPos();
+  if (Math.hypot(rx - x, rz - z) < STRIKE_HIT_R && !isDryNow()) {
+    stats.health = Math.max(0, stats.health - STRIKE_DMG);
+    learn('lightning', 'lightning sears anything in the open \u2014 shelter and fire are fair cover');
+    toast('\u26A1 a strike sears you');
+    checkDeath();
+  }
+  /* everything else panics: tigers flee the spot, gulls go quiet, crabs scuttle */
+  for (const t of tigers) { t.panicT = 6; t.panicX = x; t.panicZ = z; }
+  gullPanicT = 5;
+  for (const c of crabs)
+    if (c.alive && Math.hypot(c.x - x, c.z - z) < 25) { c.fleeT = 3; c.dir = Math.atan2(c.x - x, c.z - z); }
+}
+function dropCoconut(p) {   /* M11: extracted from actUse so the storm wind can reuse it */
+  p.cocos--;
+  setM(p.idx * 2 + p.cocos, cocosMesh, 9999, -99, 9999, 0, 0, 0, 0, 0, 0);
+  const mesh = new THREE.Mesh(itemGeo, itemMat);
+  scene.add(mesh);
+  items.push({ x: p.top[0] + 0.18, y: p.top[1] - 0.18, z: p.top[2] + 0.1,
+               vy: 0, state: 'fall', mesh, taken: false });
+}
+function dropCoconutIfAny(pi) {
+  const p = palms[pi];
+  if (p.cocos > 0) {
+    dropCoconut(p);
+    learn('wind', 'storm wind shakes coconuts loose from the palms');
+    toast('\u{1F965} the wind knocks coconuts loose');
+  }
+}
 function updateWeather(dt) {
-  const st = weather.forced || weatherStateAt(gameMin);
+  const st = effectiveWeather();
   const k = Math.min(1, dt * 3);   /* ~1 s visual blend */
-  weather.vis.rain += ((st === 'rain' ? 1 : 0) - weather.vis.rain) * k;
+  weather.vis.rain += ((isWetSt(st) ? 1 : 0) - weather.vis.rain) * k;   /* a storm keeps the streaks */
   weather.vis.cloudy += ((st === 'cloudy' ? 1 : 0) - weather.vis.cloudy) * k;
+  weather.vis.storm += ((st === 'storm' ? 1 : 0) - weather.vis.storm) * k;
   if (st !== weather.lastState) {
     if (st === 'clear') toast('\u2600 the sky clears');
     else if (st === 'cloudy') toast('\u2601 clouds roll in');
-    else {
+    else if (st === 'rain') {
       toast('\u{1F327} it starts to rain');
       learn('weather', 'rain douses fires unless a shelter shields them \u2014 and the jungle grows faster in the rain');
+    } else {
+      toast('\u26C8 the storm breaks');
+      learn('storm', 'storms bring lightning, fallen coconuts, and a lagoon that will not give up its fish');
     }
   }
-  if (st === 'rain') douseUnshelteredFires();   /* idempotent per frame */
+  if (isWetSt(st)) douseUnshelteredFires();   /* idempotent per frame; torches stay lit */
+  /* M11: fire the effective storm segment's precomputed events as they come due
+     (lazy catch-up; gated on the effective state so a debug pin suppresses them) */
+  if (st === 'storm')
+    for (const ev of weatherSegAt(gameMin).evs)
+      if (!ev.done && ev.t <= gameMin) {
+        ev.done = true;
+        if (ev.kind === 'strike') doLightning(ev.x, ev.z);
+        else dropCoconutIfAny(ev.pi);
+      }
+  stormFlash = Math.max(0, stormFlash - dt * 3);
+  if (stormBoltT > 0) { stormBoltT -= dt; bolt.visible = stormBoltT > 0; }
+  else bolt.visible = false;
   weather.lastState = st;
   weather.lastMin = gameMin;
 }
@@ -1980,10 +2110,12 @@ const rainDrops = [];
 function updateRain(dt) {
   if (weather.vis.rain <= 0.5) { rainGrp.visible = false; return; }
   rainGrp.visible = true;
+  const fall = 14 + 8 * weather.vis.storm;   /* M11: storm wind drives harder */
+  const lean = 2.5 * weather.vis.storm;
   for (const d of rainDrops) {
-    d.y -= 14 * dt;
+    d.y -= fall * dt;
     if (d.y < 0.3) d.y += 9;
-    d.mesh.position.set(rig.position.x + d.x, rig.position.y + d.y, rig.position.z + d.z);
+    d.mesh.position.set(rig.position.x + d.x + lean, rig.position.y + d.y, rig.position.z + d.z);
   }
 }
 
@@ -1998,7 +2130,7 @@ let p0 = 0.1;      /* start ~08:00 */
   const __q = new URLSearchParams(location.search);
   if (['t'].some((k) => __q.has(k))) p0 = Math.min(0.999, Math.max(0, parseFloat(__q.get('t')) || 0));
   const __w = __q.get('weather');
-  if (__w === 'clear' || __w === 'cloudy' || __w === 'rain') setWeatherDebug(__w);
+  if (__w === 'clear' || __w === 'cloudy' || __w === 'rain' || __w === 'storm') setWeatherDebug(__w);
   if (__q.has('start')) {
     started = true;
     overlay.style.display = 'none';
@@ -2039,15 +2171,17 @@ function updateSky(dt) {
   const duskK = p < DAY_FRAC ? Math.max(0, 1 - Math.abs(el) / 0.3) * 0.45 : 0;
   tmpCol.lerp(SKY_DUSK, duskK);
   skyColor.copy(tmpCol);
-  /* M10 weather: clouds/rain blend the sky, dim the sun, close the fog */
-  const sunDim = Math.max(0, 1 - 0.5 * weather.vis.cloudy - 0.6 * weather.vis.rain);
+  /* M10 weather: clouds/rain blend the sky, dim the sun, close the fog;
+     M11: a storm darkens everything and lightning flashes the sky */
+  const sunDim = Math.max(0, 1 - 0.5 * weather.vis.cloudy - 0.6 * weather.vis.rain - 0.25 * weather.vis.storm);
   sun.intensity *= sunDim;
   tmpCol.copy(skyColor).lerp(WEATHER_SKY_CLOUDY, 0.45 * weather.vis.cloudy);
   tmpCol.lerp(WEATHER_SKY_RAIN, 0.7 * weather.vis.rain);
-  skyColor.copy(tmpCol);
+  tmpCol.lerp(WEATHER_SKY_STORM, 0.6 * weather.vis.storm);
+  skyColor.copy(tmpCol).lerp(WEATHER_SKY_FLASH, 0.5 * stormFlash);
   scene.fog.color = skyColor;
-  scene.fog.near = 100; scene.fog.far = 520 - 200 * weather.vis.rain;
-  hemi.intensity = (0.18 + 0.62 * dayFactor) * Math.max(0, 1 - 0.3 * weather.vis.cloudy - 0.45 * weather.vis.rain);
+  scene.fog.near = 100; scene.fog.far = 520 - 200 * weather.vis.rain - 120 * weather.vis.storm;
+  hemi.intensity = (0.18 + 0.62 * dayFactor) * Math.max(0, 1 - 0.3 * weather.vis.cloudy - 0.45 * weather.vis.rain - 0.3 * weather.vis.storm);
   /* HUD clock */
   const hc = clockFromP((p0 + gameMin / 1800) % 1);
   const hh = Math.floor(hc), mm = Math.floor((hc - hh) * 60);
@@ -2058,12 +2192,13 @@ function updateSky(dt) {
       + (campIsLit() ? ' \u00B7 \u{1F525}lit' : '')
     : 'no camp \u2014 H on flat dry land';
   const wst = weather.forced || weatherStateAt(gameMin);
-  const wGlyph = wst === 'clear' ? '\u2600' : wst === 'cloudy' ? '\u2601' : '\u{1F327}';
+  const wGlyph = { clear: '\u2600', cloudy: '\u2601', rain: '\u{1F327}', storm: '\u26C8' }[wst];
   const hp = `⏱ ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  [${phase}]   ${wGlyph} ${wst}\n` +
             `🌿 ${zoneAt(heightAt(rig.position.x, rig.position.z))}   ·   ${fps | 0} fps\n` +
             `💧 ${bar(stats.thirst)} ${String(stats.thirst | 0).padStart(3, ' ')}\n` +
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
+            `\u261E ${bar(stats.wet)} ${String(stats.wet | 0).padStart(3, ' ')}\n` +
             `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
             `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
@@ -2121,11 +2256,19 @@ function frame(t) {
     gameMin += dt * (pNow < DAY_FRAC ? 0.6 : 1.2);   /* 12h day = 20 real min, 12h night = 10 real min */
     stats.thirst = Math.max(0, stats.thirst - THIRST_RATE * dt);
     stats.hunger = Math.max(0, stats.hunger - HUNGER_RATE * dt);
+    /* M11: rain/storm soaks you unless shelter or a nearby fire dries you */
+    const wst = effectiveWeather();
+    if (isWetSt(wst) && !isDryNow())
+      stats.wet = Math.min(100, stats.wet + (wst === 'storm' ? STORM_WET_RATE : RAIN_WET_RATE) * dt);
+    else
+      stats.wet = Math.max(0, stats.wet - (isDryNow() ? DRY_RATE_WARM : DRY_RATE) * dt);
     let hp = 0;
     if (stats.thirst <= 0) hp -= 1.5 * dt;
     if (stats.hunger <= 0) hp -= 1.0 * dt;
     if (hp === 0 && stats.thirst > 15 && stats.hunger > 15 && !infectedWound) hp += 0.35 * dt;
+    hp -= (stats.wet / 100) * WET_DRAIN * dt;   /* M11: soaking cold drains health */
     stats.health = Math.min(100, Math.max(0, stats.health + hp));
+    if (stats.wet > 15) learn('wet', 'soaking is deadly cold \u2014 shelter or fire dries you off');
     if (poisonDrain) {   /* M8: poison health bleed (poisonyam), real seconds */
       stats.health = Math.max(0, stats.health - poisonDrain.rate * dt);
       poisonDrain.rem -= dt;
