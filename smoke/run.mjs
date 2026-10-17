@@ -336,6 +336,66 @@ patched += `
   if (Math.abs(rig.position.x - bo.x) + Math.abs(rig.position.z - bo.z) > 0.01) throw new Error('did not wake on the bed');
   pump(2);
   if (sun.intensity <= 0) throw new Error('dawn after sleep should have sun');
+
+  /* ---- M5: tiger (spawn, patrol/stalk/chase, retreat from fire) ---- */
+
+  // deterministic spawn: 3 tigers in the jungle band, well clear of each other and of spawn
+  if (tigers.length !== 3) throw new Error('expected 3 tigers: ' + tigers.length);
+  if (tigers.some((t) => heightAt(t.hx, t.hz) < 7 || heightAt(t.hx, t.hz) > 20)) throw new Error('tiger home outside the jungle band');
+  for (let i = 0; i < tigers.length; i++)
+    for (let j = i + 1; j < tigers.length; j++)
+      if (Math.hypot(tigers[i].hx - tigers[j].hx, tigers[i].hz - tigers[j].hz) < 55) throw new Error('two tigers spawn too close');
+  if (tigers.some((t) => Math.hypot(t.hx - spawn.x, t.hz - spawn.z) < 55)) throw new Error('tiger too close to spawn');
+
+  // gameMin accumulated across M0‒M4 (sleep lands p at dawn 0.05), so zero it
+  // for setClockP to mean exactly what we ask for
+  gameMin = 0;
+
+  // day: tigers hide, standing still at home (player parked at spawn, 60m+ from all tigers)
+  rig.position.set(spawn.x, Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25), spawn.z);
+  setClockP(0.33); pump(10);
+  if (!tigers.every((t) => t.state === 'hide' && Math.hypot(t.x - t.hx, t.z - t.hz) < 1))
+    throw new Error('day tigers should hide at home: ' + tigers.map((t) => t.state).join(','));
+  const tStart = tigers.map((t) => ({ x: t.x, z: t.z }));
+
+  // night: every tiger is active (patrolling, or fleeing if its territory touches a fire) and moving
+  setClockP(0.85); pump(30);
+  if (!tigers.every((t, i) => (t.state === 'patrol' || t.state === 'flee') &&
+      Math.hypot(t.x - tStart[i].x, t.z - tStart[i].z) > 0.5))
+    throw new Error('night tigers should move: ' + tigers.map((t) => t.state).join(','));
+
+  // threat loop: approach a fire-free tiger; it stalks/closes, then strikes on contact
+  const T = tigers.find((t) => t.state === 'patrol' && !nearFire(t.hx, t.hz, 25));
+  if (!T) throw new Error('no fire-free tiger available for the threat test');
+  let ax = T.hx + 12, az = T.hz;
+  for (let k = 1; k < 16 && heightAt(ax, az) < 1; k++) {
+    const a2 = (k * Math.PI) / 8;
+    ax = T.hx + Math.cos(a2) * 12; az = T.hz + Math.sin(a2) * 12;
+  }
+  if (heightAt(ax, az) < 0.35) throw new Error('no dry ground near the tiger for the fire test');
+  rig.position.set(ax, Math.max(heightAt(ax, az), WATER - 0.25), az);
+  pump(90);
+  if (T.state !== 'stalk' && T.state !== 'chase') throw new Error('tiger should stalk or chase: ' + T.state);
+  if (Math.hypot(T.x - rig.position.x, T.z - rig.position.z) >= 10) throw new Error('tiger should have closed the distance');
+
+  stats.health = 100; stats.thirst = 100; stats.hunger = 100;
+  INV.coconut = 2;
+  for (let i = 0; i < 30 && stats.health >= 80; i++) pump(20);
+  if (stats.health >= 80) throw new Error('tiger never struck: ' + stats.health);
+  if (INV.coconut !== 0) throw new Error('tiger attack should drop all carried loot');
+  if (!learned.has('tiger')) throw new Error('tiger learn entry missing');
+
+  // fire counter: light a fire where the tiger is striking; it retreats
+  actFire();
+  pump(6);
+  if (T.state !== 'flee') throw new Error('tiger should flee the fire: ' + T.state);
+  pump(150);
+  if (nearFire(T.x, T.z, 10)) throw new Error('tiger should have retreated from the fire');
+
+  // daylight: it returns to its territory and hides
+  setClockP(0.33); pump(1200);
+  if (T.state !== 'hide') throw new Error('day tiger should hide: ' + T.state);
+  if (Math.hypot(T.x - T.hx, T.z - T.hz) > 1.5) throw new Error('day tiger should be at home');
 }
 `;
 const file = join(here, '.game-smoke.mjs');

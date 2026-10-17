@@ -127,7 +127,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M2** ✅ | Camp build spot + simple building placement | Player can choose a camp location and place basic camp structures |
 | **M3** ✅ | Fence + camp light/fire integration | Functional fenced and lit camp |
 | **M4** ✅ | Sleep system + night survival loop | Player can sleep safely under valid camp conditions |
-| **M5** | First tiger: spawn, movement, stalking/chasing, retreat from fire | Tiger creates a functional threat loop |
+| **M5** ✅ | First tiger: spawn, movement, stalking/chasing, retreat from fire | Tiger creates a functional threat loop |
 | **M6** | Night-1 encounter: tiger + crabs + gulls + balancing | First scary night; if not tense/fun, stop and fix before continuing |
 | **M7** | Vegetation framework: deterministic spawning, plant data, growth/state system | Plants exist as a reusable gameplay system |
 | **M8** | Edible + poisonous plants and vegetables | Foraging requires identification and risk/reward choices |
