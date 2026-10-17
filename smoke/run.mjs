@@ -534,10 +534,11 @@ patched += `
   const readyFrac = plants.filter((p) => p.state === 'ready').length / plants.length;
   if (readyFrac < 0.3) throw new Error('too few ready plants on day 1: ' + readyFrac);
 
-  // instanced meshes sized per species
-  if (plantMesh.tuft.count !== fiberPlants.length * 3) throw new Error('tuft mesh count wrong: ' + plantMesh.tuft.count);
-  if (plantMesh.shrub.count !== shrubPlants.length) throw new Error('shrub mesh count wrong');
-  if (plantMesh.head.count !== flowerPlants.length) throw new Error('flower head count wrong');
+  // instanced meshes sized per kind across ALL species of that kind (M8)
+  const kindCount = (k) => plants.filter((p) => PLANT_TYPES[p.type].kind === k).length;
+  if (plantMesh.tuft.count !== kindCount('tuft') * 3) throw new Error('tuft mesh count wrong: ' + plantMesh.tuft.count);
+  if (plantMesh.shrub.count !== kindCount('shrub')) throw new Error('shrub mesh count wrong');
+  if (plantMesh.head.count !== kindCount('flower')) throw new Error('flower head count wrong');
 
   // determinism: the first fiber spawn must be reproducible from the species' private stream
   {
@@ -620,6 +621,158 @@ patched += `
   if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100) throw new Error('pre-M7 vegetation counts changed');
   if (crabs.length !== 9 || gulls.length !== 5 || tigers.length !== 3 || schools.length !== 5)
     throw new Error('pre-M7 populations changed');
+
+  /* ---- M8: edible + poisonous plants (forage, Q eating, vomit/drain, cook) ---- */
+
+  // slot allocation: no two plants share a slot; fiber keeps its M7 0-based slots
+  {
+    const seen = new Set();
+    for (const p of plants) {
+      if (seen.has(p.slot)) throw new Error('duplicate plant slot: ' + p.slot);
+      seen.add(p.slot);
+    }
+    if (!fiberPlants.every((p) => p.slot === p.si)) throw new Error('fiber slots no longer 0-based (M7 regression)');
+  }
+
+  // the 7 new species: counts, height bands, minDist minimums
+  const m8spec = { sweetpotato: [30, 0.8, 5.0, 5], wildberry: [30, 4, 7, 5], banana: [25, 8, 13, 6],
+                  yam: [25, 11.5, 15.8, 6], poisonberry: [18, 4, 7, 5], poisonfern: [18, 0.8, 5.0, 5],
+                  poisonyam: [15, 11.5, 15.8, 6] };
+  for (const [id, [count, hmin, hmax, minDist]] of Object.entries(m8spec)) {
+    const list = plants.filter((p) => p.type === id);
+    if (list.length < Math.floor(count * 0.7)) throw new Error('too few ' + id + ': ' + list.length);
+    if (list.some((p) => p.h < hmin || p.h > hmax)) throw new Error(id + ' outside its height band');
+    for (let i = 0; i < list.length; i++)
+      for (let j = i + 1; j < list.length; j++)
+        if (Math.hypot(list[i].x - list[j].x, list[i].z - list[j].z) < minDist)
+          throw new Error('two ' + id + ' closer than minDist');
+  }
+
+  // first-spawn determinism for one new species (poisonberry, private stream)
+  {
+    const def = PLANT_TYPES.poisonberry;
+    const r = mulberry32(SEED + def.seedOffset);
+    let first = null, tries = 0;
+    while (!first && tries++ < 4000) {
+      const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * ISLAND_R * 0.96;
+      const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+      if (heightAt(x, z) < def.hmin || heightAt(x, z) > def.hmax) continue;
+      first = { x, z };
+    }
+    const pb = plants.find((p) => p.type === 'poisonberry');
+    if (!pb) throw new Error('no poisonberry planted');
+    if (Math.abs(first.x - pb.x) > 1e-9 || Math.abs(first.z - pb.z) > 1e-9)
+      throw new Error('poisonberry spawn not reproducible from its private stream');
+  }
+
+  // uncontested ready plant (reuse the M7 scan pattern)
+  const m8pick = (id) => {
+    let hit = null;
+    scan: for (const p of plants) {
+      if (p.type !== id || p.state !== 'ready' || p.h < 0.35) continue;
+      if (palms.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 3.5)) continue;
+      if (crabs.some((c) => c.alive && Math.hypot(c.x - p.x, c.z - p.z) < 1.5)) continue;
+      if (fires.some((f) => Math.hypot(f.x - p.x, f.z - p.z) < 2.5)) continue;
+      if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - p.x, i.z - p.z) < 1.6)) continue;
+      if (tigers.some((t) => (t.state === 'stalk' || t.state === 'chase') && Math.hypot(t.x - p.x, t.z - p.z) < 12)) continue;
+      hit = p; break scan;
+    }
+    if (!hit) throw new Error('no uncontested ready ' + id + ' for the M8 harvest test');
+    return hit;
+  };
+
+  // harvest each new species once: +1 INV, charge down, learn policy
+  for (const id of ['sweetpotato', 'wildberry', 'banana', 'yam', 'poisonberry', 'poisonfern', 'poisonyam']) {
+    const p = m8pick(id);
+    rig.position.set(p.x, Math.max(p.h, WATER - 0.25), p.z);
+    const before = INV[id];
+    actUse();
+    if (INV[id] !== before + 1) throw new Error(id + ' harvest did not land in inventory: ' + INV[id]);
+    if (p.chargesLeft !== PLANT_TYPES[id].charges - 1) throw new Error(id + ' charge not decremented');
+  }
+  if (!learned.has('banana')) throw new Error('edible harvest learn entry missing');
+  if (learned.has('poisonberry') || learned.has('poisonfern') || learned.has('poisonyam'))
+    throw new Error('poison harvest should not write a learn entry (learned, not labeled)');
+
+  // eating: Q prefers edibles (banana before wildberry), raw meals are small
+  stats.thirst = 100; stats.hunger = 50; stats.health = 100;
+  INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
+  INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
+  INV.wildberry = 1; INV.banana = 1;
+  eatGathered();
+  if (INV.banana !== 0 || stats.hunger < 63 || stats.hunger > 65)
+    throw new Error('Q should eat banana (+14) first: ' + stats.hunger);
+  eatGathered();
+  if (INV.wildberry !== 0 || stats.hunger < 72 || stats.hunger > 74)
+    throw new Error('wildberry (+10) meal wrong: ' + stats.hunger);
+
+  // raw yam: tiny gain, then nausea vomit undoes it and writes the know entry
+  stats.hunger = 60;
+  INV.yam = 1;
+  eatGathered();
+  if (INV.yam !== 0) throw new Error('raw yam was not eaten');
+  if (stats.hunger > 60.01) throw new Error('raw yam + vomit should net ~zero: ' + stats.hunger);
+  if (!learned.has('eat-yam')) throw new Error('raw-yam "you now know" entry missing');
+
+  // poisons only eat when nothing else remains; vomit loses the last real meal
+  stats.hunger = 70; stats.thirst = 70;
+  lastMeal = { hunger: 10, thirst: 5 };
+  INV.poisonberry = 1;
+  eatGathered();
+  if (INV.poisonberry !== 0) throw new Error('poisonberry was not eaten');
+  if (Math.abs(stats.hunger - 60) > 0.01 || Math.abs(stats.thirst - 65) > 0.01)
+    throw new Error('vomit should undo the last meal: ' + stats.hunger + '/' + stats.thirst);
+  if (!learned.has('eat-poisonberry')) throw new Error('poisonberry "you now know" entry missing');
+
+  // Q never eats a poison while an edible foraged item remains
+  INV.poisonfern = 1; INV.wildberry = 1;
+  eatGathered();
+  if (INV.wildberry !== 0 || INV.poisonfern !== 1) throw new Error('wildberry should be eaten before poisonfern');
+
+  // poisonyam: real-second health bleed (regen off via low thirst), then expiry
+  stats.health = 100; stats.thirst = 10; stats.hunger = 20; poisonDrain = null;
+  INV.poisonfern = 0;
+  INV.poisonyam = 1;
+  eatGathered();
+  if (!poisonDrain || poisonDrain.rem <= 0) throw new Error('poisonyam should start a health drain');
+  const hp8 = stats.health;
+  pump(60);   // ~1 real second
+  if (stats.health >= hp8) throw new Error('poison drain should bleed health: ' + stats.health + ' vs ' + hp8);
+  if (!learned.has('eat-poisonyam')) throw new Error('poisonyam "you now know" entry missing');
+  poisonDrain = { rem: 0.05, rate: 1 };
+  pump(12);
+  if (poisonDrain !== null) throw new Error('poison drain should expire');
+
+  // cooking: sweetpotato then yam over a free fire; cooked meals beat raw in Q order
+  INV.sweetpotato = 1; INV.yam = 1;
+  const fire8 = fires.find((f) => !f.cooking);
+  if (!fire8) throw new Error('no free fire for the M8 cook test');
+  rig.position.set(fire8.x, Math.max(fire8.g, WATER - 0.25), fire8.z);
+  actUse();
+  if (!fire8.cooking || fire8.cooking.item !== 'sweetpotato')
+    throw new Error('sweetpotato should cook first: ' + (fire8.cooking && fire8.cooking.item));
+  pump(200);   // > 2.5 s cook
+  if (INV.sweetpotato !== 0 || INV.sweetpotatoCooked !== 1) throw new Error('sweetpotato was not cooked');
+  actUse();
+  if (!fire8.cooking || fire8.cooking.item !== 'yam') throw new Error('yam should cook second');
+  pump(200);
+  if (INV.yam !== 0 || INV.yamCooked !== 1) throw new Error('yam was not cooked');
+  stats.hunger = 40;
+  eatGathered();
+  if (INV.yamCooked !== 0 || INV.sweetpotatoCooked !== 1)
+    throw new Error('Q should eat yamCooked before sweetpotatoCooked');
+  if (stats.hunger < 59 || stats.hunger > 61) throw new Error('cooked yam (+20) meal wrong: ' + stats.hunger);
+
+  // respawn drops the new keys and clears the poison drain
+  stats.health = 0; checkDeath();
+  if (!dead) throw new Error('player should be dead at 0 health (M8)');
+  INV.banana = 2; INV.poisonberry = 3; INV.sweetpotatoCooked = 1; poisonDrain = { rem: 5, rate: 1 };
+  respawn();
+  if (dead) throw new Error('respawn (M8) failed');
+  if (INV.sweetpotato + INV.sweetpotatoCooked + INV.yam + INV.yamCooked + INV.banana + INV.wildberry
+      + INV.poisonberry + INV.poisonfern + INV.poisonyam !== 0)
+    throw new Error('respawn should drop foraged inventory');
+  if (poisonDrain !== null) throw new Error('respawn should clear the poison drain');
 }
 `;
 const file = join(here, '.game-smoke.mjs');

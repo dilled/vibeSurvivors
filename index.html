@@ -77,7 +77,7 @@
   <div class="card">
     <div class="row"><span>move / sprint</span><b>W A S D &middot; Shift</b></div>
     <div class="row"><span>use &mdash; drink / pick / shake / cook / catch</span><b>E</b></div>
-    <div class="row"><span>eat &mdash; coconut / fish / crab</span><b>C &middot; F &middot; V</b></div>
+    <div class="row"><span>eat &mdash; coconut / fish / crab / foraged</span><b>C &middot; F &middot; V &middot; Q</b></div>
     <div class="row"><span>make fire / make spear</span><b>G &middot; B</b></div>
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
@@ -402,6 +402,64 @@ const PLANT_TYPES = {
     regrowDays: 0.5, charges: 2, kind: 'flower', color: 0xd76fa8,
     drop: null, learn: '',
   },
+  /* M8: edible + poisonous forage. food/poison rows carry the effect data,
+     the eating system below reads them. Poisons mimic their edible twin:
+     same kind, same height band, similar scale, only a color-shift apart
+     (that IS the identification mechanic). Poison rows have an empty
+     harvest learn — the "you now know" entry is written by the first
+     (poisoned) eat instead: learned, not labeled. */
+  sweetpotato: {
+    seedOffset: 423, hmin: 0.8, hmax: 5.0, count: 30, minDist: 5,
+    regrowDays: 1, charges: 2, kind: 'tuft', color: 0xc78d4e,
+    drop: { invKey: 'sweetpotato', n: 1 },
+    food: { raw: { hunger: 8, know: 'you now know: the sweet potato is far better cooked over a fire' },
+            cooked: { hunger: 16 } },
+    learn: 'sweet potato — beach grass hides a starchy tuber',
+  },
+  wildberry: {
+    seedOffset: 529, hmin: 4, hmax: 7, count: 30, minDist: 5,
+    regrowDays: 1, charges: 2, kind: 'flower', color: 0xd75b6b,
+    drop: { invKey: 'wildberry', n: 1 },
+    food: { raw: { hunger: 10 } },
+    learn: 'wild berry — small but sweet',
+  },
+  banana: {
+    seedOffset: 631, hmin: 8, hmax: 13, count: 25, minDist: 6,
+    regrowDays: 2, charges: 3, kind: 'shrub', color: 0x6fae4e,
+    drop: { invKey: 'banana', n: 1 },
+    food: { raw: { hunger: 14 } },
+    learn: 'wild banana — a decent meal raw',
+  },
+  yam: {
+    seedOffset: 743, hmin: 11.5, hmax: 15.8, count: 25, minDist: 6,
+    regrowDays: 2, charges: 2, kind: 'shrub', color: 0x8a6d3b,
+    drop: { invKey: 'yam', n: 1 },
+    food: { raw: { hunger: 4, nausea: true, know: 'you now know: the raw yam upsets you — cook it over a fire' },
+            cooked: { hunger: 20 } },
+    learn: 'wild yam — a tough brown tuber',
+  },
+  poisonberry: {
+    seedOffset: 851, hmin: 4, hmax: 7, count: 18, minDist: 5,
+    regrowDays: 1, charges: 2, kind: 'flower', color: 0x8b5fa8,
+    drop: { invKey: 'poisonberry', n: 1 },
+    poison: { kind: 'vomit', know: 'you now know: the purple-veined berry is wrong' },
+    learn: '',
+  },
+  poisonfern: {
+    seedOffset: 967, hmin: 0.8, hmax: 5.0, count: 18, minDist: 5,
+    regrowDays: 1, charges: 2, kind: 'tuft', color: 0x8a8f86,
+    drop: { invKey: 'poisonfern', n: 1 },
+    poison: { kind: 'vomit', know: 'you now know: the ashen fern is wrong' },
+    learn: '',
+  },
+  poisonyam: {
+    seedOffset: 1081, hmin: 11.5, hmax: 15.8, count: 15, minDist: 6,
+    regrowDays: 2, charges: 2, kind: 'shrub', color: 0xb8b09a,
+    drop: { invKey: 'poisonyam', n: 1 },
+    poison: { kind: 'drain', drain: { rate: 0.25, dur: 90 },
+              know: 'you now know: the pale yam burns from the inside' },
+    learn: '',
+  },
 };
 
 function spawnSpecies(def) {
@@ -445,22 +503,34 @@ function dynInstanced(geo, mat, count) {
   return m;
 }
 const plantMesh = {};  /* kind -> InstancedMesh(es) */
+/* M8: slot allocation is per-kind across ALL species of that kind. Each
+   species gets a contiguous base offset (in species iteration order, so
+   fiber stays base 0 in its kind); every plant stores its absolute slot.
+   Two same-kind species never share a slot. */
 {
-  const per = {};
-  for (const k in PLANT_TYPES) per[k] = plants.filter((p) => p.type === k).length;
+  const kindTotals = { tuft: 0, shrub: 0, flower: 0 };
+  const slotBase = {};
+  let base = 0;
+  for (const k in PLANT_TYPES) {
+    const n = plants.filter((p) => p.type === k).length;
+    slotBase[k] = base;
+    base += n;
+    kindTotals[PLANT_TYPES[k].kind] += n;
+  }
+  for (const p of plants) p.slot = slotBase[p.type] + p.si;
   const tuftGeo = new THREE.ConeGeometry(0.16, 1.5, 4);
   tuftGeo.translate(0, 0.75, 0);
-  plantMesh.tuft = dynInstanced(tuftGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.fiber * 3);
+  plantMesh.tuft = dynInstanced(tuftGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), kindTotals.tuft * 3);
   const shrubGeo = new THREE.IcosahedronGeometry(1, 0);
   shrubGeo.scale(1, 0.7, 1);
   shrubGeo.translate(0, 0.4, 0);
-  plantMesh.shrub = dynInstanced(shrubGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.shrub);
+  plantMesh.shrub = dynInstanced(shrubGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), kindTotals.shrub);
   const stemGeo = new THREE.CylinderGeometry(0.03, 0.045, 0.6, 4);
   stemGeo.translate(0, 0.3, 0);
-  plantMesh.stem = dynInstanced(stemGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.flower);
+  plantMesh.stem = dynInstanced(stemGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), kindTotals.flower);
   const headGeo = new THREE.IcosahedronGeometry(0.16, 0);
   headGeo.translate(0, 0.62, 0);
-  plantMesh.head = dynInstanced(headGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.flower);
+  plantMesh.head = dynInstanced(headGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), kindTotals.flower);
 }
 
 const plantColBase = {};
@@ -478,23 +548,23 @@ function emitPlant(p) {
   if (def.kind === 'tuft') {
     for (let k = 0; k < 3; k++) {
       const a = k * 2.09 + p.x * 0.3;
-      setM(p.si * 3 + k, plantMesh.tuft,
+      setM(p.slot * 3 + k, plantMesh.tuft,
         p.x + Math.cos(a) * 0.12 * sc, p.h - 0.02, p.z + Math.sin(a) * 0.12 * sc,
         Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4, sc, sc, sc);
-      plantMesh.tuft.setColorAt(p.si * 3 + k, c);
+      plantMesh.tuft.setColorAt(p.slot * 3 + k, c);
     }
     plantMesh.tuft.instanceMatrix.needsUpdate = true;
     if (plantMesh.tuft.instanceColor) plantMesh.tuft.instanceColor.needsUpdate = true;
   } else if (def.kind === 'shrub') {
-    setM(p.si, plantMesh.shrub, p.x, p.h - 0.05, p.z, 0, p.x * 0.7, 0, sc, sc * 0.8, sc);
-    plantMesh.shrub.setColorAt(p.si, c);
+    setM(p.slot, plantMesh.shrub, p.x, p.h - 0.05, p.z, 0, p.x * 0.7, 0, sc, sc * 0.8, sc);
+    plantMesh.shrub.setColorAt(p.slot, c);
     plantMesh.shrub.instanceMatrix.needsUpdate = true;
     if (plantMesh.shrub.instanceColor) plantMesh.shrub.instanceColor.needsUpdate = true;
   } else {  /* flower: stem + head */
-    setM(p.si, plantMesh.stem, p.x, p.h - 0.02, p.z, 0, 0, 0, sc, sc, sc);
-    setM(p.si, plantMesh.head, p.x, p.h - 0.02, p.z, 0, 0, 0, sc, sc, sc);
-    plantMesh.stem.setColorAt(p.si, plantStemCol);
-    plantMesh.head.setColorAt(p.si, c);
+    setM(p.slot, plantMesh.stem, p.x, p.h - 0.02, p.z, 0, 0, 0, sc, sc, sc);
+    setM(p.slot, plantMesh.head, p.x, p.h - 0.02, p.z, 0, 0, 0, sc, sc, sc);
+    plantMesh.stem.setColorAt(p.slot, plantStemCol);
+    plantMesh.head.setColorAt(p.slot, c);
     plantMesh.stem.instanceMatrix.needsUpdate = true;
     plantMesh.head.instanceMatrix.needsUpdate = true;
     if (plantMesh.head.instanceColor) plantMesh.head.instanceColor.needsUpdate = true;
@@ -601,6 +671,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyC') eatCoconut();
   if (e.code === 'KeyF') eatFish();
   if (e.code === 'KeyV') eatCrab();
+  if (e.code === 'KeyQ') eatGathered();   /* M8: eat foraged food (safe first, poisons last) */
   if (e.code === 'KeyG') actFire();
   if (e.code === 'KeyB') actCraftSpear();
   if (e.code === 'KeyX') actStrike();
@@ -616,11 +687,41 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 /* ---------------- survival: stats, inventory, journal ---------------- */
 
 const stats = { thirst: 100, hunger: 100, health: 100 };
-const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0 };
+const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0,
+              sweetpotato: 0, sweetpotatoCooked: 0, yam: 0, yamCooked: 0, banana: 0, wildberry: 0,
+              poisonberry: 0, poisonfern: 0, poisonyam: 0 };
 let dead = false, spear = false;
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
+
+/* M8: foraged-food system. Q eats the first nonzero entry of VEG_EAT_ORDER:
+   cooked meals first, then raw edibles, poisons dead last so they are only
+   consumed under real hunger pressure (starvation risk/reward).
+   lastMeal remembers the most recent meal's gains so vomit() can undo it;
+   poisonDrain is a real-second health bleed (poisonyam), ticked in frame(). */
+const VEG_EAT_ORDER = [
+  ['yamCooked', 'yam', 1], ['sweetpotatoCooked', 'sweetpotato', 1],
+  ['banana', 'banana', 0], ['wildberry', 'wildberry', 0],
+  ['sweetpotato', 'sweetpotato', 0], ['yam', 'yam', 0],
+  ['poisonberry', 'poisonberry', 0], ['poisonfern', 'poisonfern', 0], ['poisonyam', 'poisonyam', 0],
+];
+const VEG_EAT_TOAST = {
+  yamCooked: '\u{1F525} cooked yam \u2014 a filling meal',
+  sweetpotatoCooked: '\u{1F525} cooked sweet potato',
+  banana: '\u{1F34C} wild banana \u2014 a decent meal',
+  wildberry: '\u{1F352} wild berries \u2014 small but sweet',
+  sweetpotato: '\u{1F426} raw sweet potato \u2014 something, but it wants a fire',
+  yam: '\u{1F426} raw yam \u2014 something churns in your stomach\u2026',
+};
+let lastMeal = { hunger: 0, thirst: 0 };
+let poisonDrain = null;   /* {rem: real seconds left, rate: hp/s} */
 const THIRST_RATE = 100 / 540;   /* full -> empty in ~9 real minutes */
 const HUNGER_RATE = 100 / 1320;  /* full -> empty in ~22 real minutes */
+
+/* M8: fire cooking is map-driven (M1 order preserved: fish first, then crab,
+   then foraged cookables). Only fishRaw/crab/sweetpotato/yam cook. */
+const COOKABLE = ['fishRaw', 'crab', 'sweetpotato', 'yam'];
+const COOK_RESULT = { fishRaw: 'fishCooked', crab: 'crabCooked', sweetpotato: 'sweetpotatoCooked', yam: 'yamCooked' };
+const COOK_NAME = { fishRaw: 'fish', crab: 'crab', sweetpotato: 'sweet potato', yam: 'yam' };
 
 const journal = [];   /* M6: persisted at camp save */
 const learned = new Set();
@@ -687,8 +788,9 @@ function updateFires(dt) {
       if (f.cooking.t <= 0) {
         const item = f.cooking.item;
         f.cooking = null;
-        if (item === 'fishRaw') { INV.fishRaw--; INV.fishCooked++; toast('\u{1F525} the fish is cooked'); }
-        else { INV.crab--; INV.crabCooked++; toast('\u{1F525} the crab is cooked'); }
+        INV[item]--;
+        INV[COOK_RESULT[item]]++;
+        toast('\u{1F525} the ' + COOK_NAME[item] + ' is cooked');
       }
     }
   }
@@ -982,6 +1084,8 @@ function updateTigers(dt) {
           t.atkCd = TIG_ATK_CD;
           stats.health = Math.max(0, stats.health - TIG_ATK_DMG);
           INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
+          INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
+          INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
           learn('tiger', 'tigers hunt at night \u2014 fire and torchlight drive them off');
           toast('\u{1F981} the tiger strikes \u2014 you drop what you carry');
           checkDeath();
@@ -1370,13 +1474,15 @@ function actUse() {
     toast('\u{1F965} +1 coconut');
     return;
   }
-  /* 2. cook raw food over a fire */
+  /* 2. cook raw food over a fire (M8: map-driven; M1 priority: fish > crab) */
   const f = fires.find((f) => !f.cooking && Math.hypot(f.x - x, f.z - z) < 2.5);
-  if (f && (INV.fishRaw > 0 || INV.crab > 0)) {
-    const item = INV.fishRaw > 0 ? 'fishRaw' : 'crab';
-    f.cooking = { item, t: 2.5 };
-    toast('\u{1F525} ' + (item === 'fishRaw' ? 'fish' : 'crab') + ' over the fire\u2026');
-    return;
+  if (f) {
+    const item = COOKABLE.find((k) => INV[k] > 0);
+    if (item) {
+      f.cooking = { item, t: 2.5 };
+      toast('\u{1F525} ' + COOK_NAME[item] + ' over the fire\u2026');
+      return;
+    }
   }
   /* 3. drink */
   if (h < 0.25) {
@@ -1425,7 +1531,7 @@ function actUse() {
   if (ph) {
     const d = PLANT_TYPES[ph.type].drop;
     INV[d.invKey] = (INV[d.invKey] || 0) + d.n;
-    learn(ph.type, PLANT_TYPES[ph.type].learn);
+    if (PLANT_TYPES[ph.type].learn) learn(ph.type, PLANT_TYPES[ph.type].learn);
     toast('\u{1F33F} +' + d.n + ' ' + d.invKey);
     ph.chargesLeft--;
     ph.state = ph.chargesLeft > 0 ? 'ready' : 'depleted';
@@ -1565,6 +1671,7 @@ function eatCoconut() {
   INV.coconut--;
   stats.hunger = Math.min(100, stats.hunger + 18);
   stats.thirst = Math.min(100, stats.thirst + 30);
+  lastMeal = { hunger: 18, thirst: 30 };   /* M8: what a vomit would undo */
   toast('\u{1F965} coconut \u2014 the water helps');
 }
 function eatFish() {
@@ -1572,12 +1679,14 @@ function eatFish() {
   if (INV.fishCooked > 0) {
     INV.fishCooked--;
     stats.hunger = Math.min(100, stats.hunger + 30);
+    lastMeal = { hunger: 30, thirst: 0 };
     toast('\u{1F41F} cooked fish');
     return;
   }
   if (INV.fishRaw > 0) {
     INV.fishRaw--;
     stats.hunger = Math.min(100, stats.hunger + 14);
+    lastMeal = { hunger: 14, thirst: 0 };
     toast('raw fish \u2014 something, but not enough');
     return;
   }
@@ -1588,16 +1697,49 @@ function eatCrab() {
   if (INV.crabCooked > 0) {
     INV.crabCooked--;
     stats.hunger = Math.min(100, stats.hunger + 24);
+    lastMeal = { hunger: 24, thirst: 0 };
     toast('\u{1F980} cooked crab');
     return;
   }
   if (INV.crab > 0) {
     INV.crab--;
     stats.hunger = Math.min(100, stats.hunger + 12);
+    lastMeal = { hunger: 12, thirst: 0 };
     toast('raw crab \u2014 a small meal');
     return;
   }
   toast('no crab');
+}
+function vomit() {
+  stats.hunger = Math.max(0, stats.hunger - lastMeal.hunger);
+  stats.thirst = Math.max(0, stats.thirst - lastMeal.thirst);
+  toast('\u{1F922} you vomit \u2014 the meal comes right back up');
+}
+/* M8: eat foraged food. Cooked first, raw edibles next, poisons only when
+   nothing else is left (starvation pressure). First eat of each species
+   writes the permanent "you now know" journal entry (learned, not labeled). */
+function eatGathered() {
+  if (dead) return;
+  const e = VEG_EAT_ORDER.find(([k]) => INV[k] > 0);
+  if (!e) { toast('nothing foraged to eat \u2014 E gathers, Q eats it'); return; }
+  const key = e[0], sp = e[1], cooked = e[2] === 1;
+  const def = PLANT_TYPES[sp];
+  INV[key]--;
+  if (def.poison) {
+    if (def.poison.kind === 'vomit') vomit();   /* undo the last real meal */
+    else {
+      poisonDrain = { rem: def.poison.drain.dur, rate: def.poison.drain.rate };
+      toast('\u{1F32A} the pale yam burns in your stomach\u2026');
+    }
+    learn('eat-' + sp, def.poison.know);
+    return;
+  }
+  const meal = cooked ? def.food.cooked : def.food.raw;
+  stats.hunger = Math.min(100, stats.hunger + meal.hunger);
+  lastMeal = { hunger: meal.hunger, thirst: 0 };
+  toast(VEG_EAT_TOAST[key]);
+  if (!cooked && meal.nausea) vomit();
+  if (!cooked && meal.know) learn('eat-' + sp, meal.know);
 }
 const deadEl = document.getElementById('dead');
 function checkDeath() {
@@ -1612,6 +1754,9 @@ function respawn() {
   deadEl.style.display = 'none';
   stats.thirst = stats.hunger = stats.health = 100;
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
+  INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
+  INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
+  poisonDrain = null;
   if (camp) {
     rig.position.set(camp.x, camp.g, camp.z);
     toast('you wake at your camp \u2014 what you carried is gone');
@@ -1632,7 +1777,7 @@ function contextHint() {
   if (threat) return '\u{1F981} a tiger is closing \u2014 SPRINT or stand in a lit fire (G)';
   if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - x, i.z - z) < 1.6))
     return 'E \u2014 pick up the coconut';
-  if (fires.some((f) => !f.cooking && (INV.fishRaw > 0 || INV.crab > 0) && Math.hypot(f.x - x, f.z - z) < 2.5))
+  if (fires.some((f) => !f.cooking && COOKABLE.some((k) => INV[k] > 0) && Math.hypot(f.x - x, f.z - z) < 2.5))
     return 'E \u2014 cook over the fire';
   if (h < 0.25)
     return 'E \u2014 drink';
@@ -1661,7 +1806,7 @@ function contextHint() {
     return '\u{1F981} you can see eyes in the dark \u2014 fire and torchlight drive tigers off';
   if (dayFactor < 0.5 && !campIsLit() && !nearFire(x, z, 10))
     return '\u{1F981} night is coming \u2014 light a fire (G) or your camp torch (N)';
-  if (!spear) return 'B \u2014 make a spear   \u00B7   G \u2014 make a fire   \u00B7   C/F/V \u2014 eat coconut/fish/crab';
+  if (!spear) return 'B \u2014 make a spear   \u00B7   G \u2014 make a fire   \u00B7   C/F/V/Q \u2014 eat (Q = foraged)';
   return 'coconuts under palms \u00B7 fish in the shallows \u00B7 crabs on the beach';
 }
 function updateItems(dt) {
@@ -1747,6 +1892,7 @@ function updateSky(dt) {
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
             `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
+            `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}\n` +
             `⛺🛖 ${campLine}\n` +
             `seed ${SEED}`;
   hudText = hp;
@@ -1807,6 +1953,11 @@ function frame(t) {
     if (stats.hunger <= 0) hp -= 1.0 * dt;
     if (hp === 0 && stats.thirst > 15 && stats.hunger > 15) hp += 0.35 * dt;
     stats.health = Math.min(100, Math.max(0, stats.health + hp));
+    if (poisonDrain) {   /* M8: poison health bleed (poisonyam), real seconds */
+      stats.health = Math.max(0, stats.health - poisonDrain.rate * dt);
+      poisonDrain.rem -= dt;
+      if (poisonDrain.rem <= 0) { poisonDrain = null; toast('the burning eases \u2014 you survive the pale yam'); }
+    }
     drinkCd = Math.max(0, drinkCd - dt);
     strikeCd = Math.max(0, strikeCd - dt);
     checkDeath();
