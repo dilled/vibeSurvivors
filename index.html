@@ -375,6 +375,157 @@ function setM(i, mesh, px, py, pz, rx, ry, rz, sx, sy, sz) {
   }
 }
 
+/* ---------------- vegetation: plant system (M7) ----------------
+   Reusable framework: one PLANT_TYPES data row per species (M8/M9 add
+   edible/toxic/medicinal fields to the rows, not world logic). Each
+   species draws from its own private mulberry32(SEED + seedOffset) stream,
+   so adding or recounting one species never shifts another species' or the
+   palm/tree/rock placement, and the world-gen rng-ordering invariant stays
+   untouched (plants never consume the global rng). Growth is driven by game
+   minutes (delta bookkeeping), so the sleep jump and the T clock-skip
+   fast-forward plants for free. */
+
+const PLANT_TYPES = {
+  fiber: {
+    seedOffset: 101, hmin: 0.5, hmax: 5.5, count: 40, minDist: 4,
+    regrowDays: 1, charges: 3, kind: 'tuft', color: 0x9dc45f,
+    drop: { invKey: 'fiber', n: 1 },
+    learn: 'fiber tufts \u2014 tough beach grass (E harvests it)',
+  },
+  shrub: {
+    seedOffset: 211, hmin: 7, hmax: 14, count: 30, minDist: 5,
+    regrowDays: 2, charges: 2, kind: 'shrub', color: 0x2f7a3d,
+    drop: null, learn: '',
+  },
+  flower: {
+    seedOffset: 317, hmin: 1.5, hmax: 15, count: 50, minDist: 3,
+    regrowDays: 0.5, charges: 2, kind: 'flower', color: 0xd76fa8,
+    drop: null, learn: '',
+  },
+};
+
+function spawnSpecies(def) {
+  const r = mulberry32(SEED + def.seedOffset);
+  const pts = [];
+  let attempts = 0;
+  while (pts.length < def.count && attempts < 4000) {
+    attempts++;
+    const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * ISLAND_R * 0.96;
+    const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+    const h = heightAt(x, z);
+    if (h < def.hmin || h > def.hmax) continue;
+    let ok = true;
+    for (const p of pts) if (Math.hypot(p.x - x, p.z - z) < def.minDist) { ok = false; break; }
+    if (ok) pts.push({ x, z, h });
+  }
+  return pts;
+}
+
+const plants = [];  /* {type, x, z, h, state, min, chargesLeft, si, idx, s} */
+for (const key of Object.keys(PLANT_TYPES)) {
+  const def = PLANT_TYPES[key];
+  const pts = spawnSpecies(def);
+  const regrowMin = def.regrowDays * 1440;
+  for (let i = 0; i < pts.length; i++) {
+    const frac = (((i + 1) * 7919) % 100) / 100;  /* index-derived, not rng */
+    plants.push({
+      type: key, x: pts[i].x, z: pts[i].z, h: pts[i].h,
+      state: frac < 0.45 ? 'ready' : 'growing',   /* day-1 foraging works */
+      min: frac < 0.45 ? 0 : frac * regrowMin,
+      chargesLeft: def.charges, si: i, idx: plants.length,
+      s: 0.75 + ((i * 37) % 13) / 25,            /* deterministic size variation */
+    });
+  }
+}
+
+function dynInstanced(geo, mat, count) {
+  const m = new THREE.InstancedMesh(geo, mat, count);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(m);
+  return m;
+}
+const plantMesh = {};  /* kind -> InstancedMesh(es) */
+{
+  const per = {};
+  for (const k in PLANT_TYPES) per[k] = plants.filter((p) => p.type === k).length;
+  const tuftGeo = new THREE.ConeGeometry(0.16, 1.5, 4);
+  tuftGeo.translate(0, 0.75, 0);
+  plantMesh.tuft = dynInstanced(tuftGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.fiber * 3);
+  const shrubGeo = new THREE.IcosahedronGeometry(1, 0);
+  shrubGeo.scale(1, 0.7, 1);
+  shrubGeo.translate(0, 0.4, 0);
+  plantMesh.shrub = dynInstanced(shrubGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.shrub);
+  const stemGeo = new THREE.CylinderGeometry(0.03, 0.045, 0.6, 4);
+  stemGeo.translate(0, 0.3, 0);
+  plantMesh.stem = dynInstanced(stemGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.flower);
+  const headGeo = new THREE.IcosahedronGeometry(0.16, 0);
+  headGeo.translate(0, 0.62, 0);
+  plantMesh.head = dynInstanced(headGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), per.flower);
+}
+
+const plantColBase = {};
+for (const k in PLANT_TYPES) plantColBase[k] = new THREE.Color(PLANT_TYPES[k].color);
+const plantCol = new THREE.Color();
+const plantStemCol = new THREE.Color(0x4c8a42);
+function plantStateColor(kind, state) {
+  plantCol.copy(plantColBase[kind]).multiplyScalar(state === 'ready' ? 1 : state === 'growing' ? 0.72 : 0.45);
+  return plantCol;
+}
+function emitPlant(p) {
+  const def = PLANT_TYPES[p.type];
+  const sc = p.s * (p.state === 'ready' ? 1 : p.state === 'growing' ? 0.45 : 0.22);
+  const c = plantStateColor(p.type, p.state);
+  if (def.kind === 'tuft') {
+    for (let k = 0; k < 3; k++) {
+      const a = k * 2.09 + p.x * 0.3;
+      setM(p.si * 3 + k, plantMesh.tuft,
+        p.x + Math.cos(a) * 0.12 * sc, p.h - 0.02, p.z + Math.sin(a) * 0.12 * sc,
+        Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4, sc, sc, sc);
+      plantMesh.tuft.setColorAt(p.si * 3 + k, c);
+    }
+    plantMesh.tuft.instanceMatrix.needsUpdate = true;
+    if (plantMesh.tuft.instanceColor) plantMesh.tuft.instanceColor.needsUpdate = true;
+  } else if (def.kind === 'shrub') {
+    setM(p.si, plantMesh.shrub, p.x, p.h - 0.05, p.z, 0, p.x * 0.7, 0, sc, sc * 0.8, sc);
+    plantMesh.shrub.setColorAt(p.si, c);
+    plantMesh.shrub.instanceMatrix.needsUpdate = true;
+    if (plantMesh.shrub.instanceColor) plantMesh.shrub.instanceColor.needsUpdate = true;
+  } else {  /* flower: stem + head */
+    setM(p.si, plantMesh.stem, p.x, p.h - 0.02, p.z, 0, 0, 0, sc, sc, sc);
+    setM(p.si, plantMesh.head, p.x, p.h - 0.02, p.z, 0, 0, 0, sc, sc, sc);
+    plantMesh.stem.setColorAt(p.si, plantStemCol);
+    plantMesh.head.setColorAt(p.si, c);
+    plantMesh.stem.instanceMatrix.needsUpdate = true;
+    plantMesh.head.instanceMatrix.needsUpdate = true;
+    if (plantMesh.head.instanceColor) plantMesh.head.instanceColor.needsUpdate = true;
+  }
+}
+for (const p of plants) emitPlant(p);
+
+/* growth: growing -> ready (regrowDays), ready -> (harvest charges) ->
+   depleted -> long regrow (regrowDays) -> growing (charges reset). */
+let plantClock = 0;
+function plantGrowthMult() { return 1; }  /* M10 weather hook: rain will accelerate growth */
+function updatePlants() {
+  const dMin = gameMin - plantClock;
+  if (dMin <= 0) { plantClock = gameMin; return; }
+  plantClock = gameMin;
+  const m = plantGrowthMult();
+  for (const p of plants) {
+    if (p.state === 'ready') continue;
+    const need = PLANT_TYPES[p.type].regrowDays * 1440;
+    let rem = p.min + dMin * m;
+    let changed = false;
+    for (let g = 0; g < 8 && rem >= need; g++) {  /* large dMin: fast-forward, no loop-of-frames */
+      rem -= need;
+      if (p.state === 'depleted') { p.state = 'growing'; p.chargesLeft = PLANT_TYPES[p.type].charges; changed = true; }
+      else { p.state = 'ready'; rem = 0; changed = true; break; }
+    }
+    p.min = rem;
+    if (changed) emitPlant(p);
+  }
+}
+
 /* ---------------- player (simple humanoid rig) ---------------- */
 
 const spawn = (() => {
@@ -465,7 +616,7 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 /* ---------------- survival: stats, inventory, journal ---------------- */
 
 const stats = { thirst: 100, hunger: 100, health: 100 };
-const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0 };
+const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0 };
 let dead = false, spear = false;
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
 const THIRST_RATE = 100 / 540;   /* full -> empty in ~9 real minutes */
@@ -1264,6 +1415,24 @@ function actUse() {
     toast('\u{1F980} caught a crab');
     return;
   }
+  /* 6. harvest a ready plant (M7; lowest priority ‒ added after M1‒M6 branches) */
+  let ph = null, phd = 1.5;
+  for (const p of plants) {
+    if (p.state !== 'ready' || !PLANT_TYPES[p.type].drop) continue;
+    const d = Math.hypot(p.x - x, p.z - z);
+    if (d < phd) { phd = d; ph = p; }
+  }
+  if (ph) {
+    const d = PLANT_TYPES[ph.type].drop;
+    INV[d.invKey] = (INV[d.invKey] || 0) + d.n;
+    learn(ph.type, PLANT_TYPES[ph.type].learn);
+    toast('\u{1F33F} +' + d.n + ' ' + d.invKey);
+    ph.chargesLeft--;
+    ph.state = ph.chargesLeft > 0 ? 'ready' : 'depleted';
+    ph.min = 0;
+    emitPlant(ph);
+    return;
+  }
 }
 function actStrike() {
   if (dead) return;
@@ -1471,6 +1640,9 @@ function contextHint() {
     return 'E \u2014 catch the crab (walk slowly!)';
   if (palms.some((p) => p.cocos > 0 && Math.hypot(p.x - x, p.z - z) < 3.5))
     return 'E \u2014 shake the palm';
+  if (plants.some((p) => p.state === 'ready' && PLANT_TYPES[p.type].drop &&
+    Math.hypot(p.x - x, p.z - z) < 1.5))
+    return 'E \u2014 harvest';
   if (!camp) {
     if (campCheck(x, z).ok) return 'H \u2014 make camp here';
   } else if (Math.hypot(x - camp.x, z - camp.z) < 10) {
@@ -1574,7 +1746,7 @@ function updateSky(dt) {
             `💧 ${bar(stats.thirst)} ${String(stats.thirst | 0).padStart(3, ' ')}\n` +
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
-            `🥥 ${INV.coconut}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
+            `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
             `⛺🛖 ${campLine}\n` +
             `seed ${SEED}`;
   hudText = hp;
@@ -1651,6 +1823,7 @@ function frame(t) {
   updateSky(dt);
   updateTigers(dt);   /* after updateSky so dayFactor is fresh this frame */
   updateGulls(dt);
+  updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   updateCamera();
   renderer.render(scene, camera);

@@ -129,7 +129,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M4** ✅ | Sleep system + night survival loop | Player can sleep safely under valid camp conditions |
 | **M5** ✅ | First tiger: spawn, movement, stalking/chasing, retreat from fire | Tiger creates a functional threat loop |
 | **M6** ✅ | Night-1 encounter: tiger + crabs + gulls + balancing | First scary night; if not tense/fun, stop and fix before continuing |
-| **M7** | Vegetation framework: deterministic spawning, plant data, growth/state system | Plants exist as a reusable gameplay system |
+| **M7** ✅ | Vegetation framework: deterministic spawning, plant data, growth/state system | Plants exist as a reusable gameplay system |
 | **M8** | Edible + poisonous plants and vegetables | Foraging requires identification and risk/reward choices |
 | **M9** | Medicinal plants + harvesting/regrowth | Plant resources support survival decisions over time |
 | **M10** | Weather framework: clear/cloudy/rain | Weather transitions visibly and affects the island |
@@ -160,4 +160,4 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 - **Smoke test (no browser):** `node smoke/run.mjs` — extracts the inline module from index.html, stubs three.js (`smoke/three-stub.mjs`) + DOM, pumps frames, asserts island/spawn/vegetation/movement/day-night + M1 survival (stats tick, fire+cook, drink, coconut shake/pickup/eat, spear+fish, crab catch, death/respawn) + M2 camp (camp spot validation/placement, shelter/bed structures, respawn at camp) + M3 camp fence/torch (fence ring with entrance gap, standing camp torch, camp lit state) + M4 sleep (rejection cases, dawn clock jump, resting costs, wake on the bed). Must print `SMOKE_OK`.
 - **Dev URL params:** `?t=0..1` set time of day, `?start=1` skips the title overlay. Debug keys in-game: `T` +15 min, `1/2/3/4` dawn/noon/dusk/midnight, `R` respawn.
 - **Headless render check:** `python3 -m http.server 8901 &` then `google-chrome --headless=new --no-sandbox --disable-gpu --enable-unsafe-swiftshader --window-size=960,600 --screenshot=/tmp/shot.png "http://127.0.0.1:8901/?t=0.33&start=1"`.
-- **World gen must stay deterministic** (`mulberry32(SEED)`) — ServerBase world-sync (M7) depends on it.
+- **World gen must stay deterministic** (`mulberry32(SEED)`) — ServerBase world-sync (M27+) depends on it.

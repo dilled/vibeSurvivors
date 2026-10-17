@@ -29,6 +29,7 @@ export class Color {
   set(hex) { return this.copy(new Color(hex)); }
   copy(c) { this.r = c.r; this.g = c.g; this.b = c.b; return this; }
   lerp(c, t) { this.r += (c.r - this.r) * t; this.g += (c.g - this.g) * t; this.b += (c.b - this.b) * t; return this; }
+  multiplyScalar(s) { this.r *= s; this.g *= s; this.b *= s; return this; }
 }
 
 class PositionAttr {
@@ -104,6 +105,7 @@ export class InstancedMesh extends Node {
     this.instanceMatrix = { setUsage: () => {}, count };
   }
   setMatrixAt(i, m) { this._count = (this._count || 0) + 1; }
+  setColorAt(i, c) { if (!this.instanceColor) this.instanceColor = { needsUpdate: false, n: 0 }; this.instanceColor.n = (this.instanceColor.n || 0) + 1; }
 }
 export class Scene extends Node {
   constructor() { super(); this.background = null; this.fog = null; }

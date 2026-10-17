@@ -512,6 +512,114 @@ patched += `
   if (TN.state !== 'flee') throw new Error('tiger should flee the new fire: ' + TN.state);
   pump(150);
   if (nearFire(TN.x, TN.z, 10)) throw new Error('tiger should have retreated from the fire');
+
+  /* ---- M7: vegetation framework (plant data, deterministic spawn, growth, harvest) ---- */
+
+  stats.health = 100; stats.thirst = 100; stats.hunger = 100;
+  setClockP(0.33); pump(10);   // day: tigers hide, nothing stalks
+
+  const fiberPlants = plants.filter((p) => p.type === 'fiber');
+  const shrubPlants = plants.filter((p) => p.type === 'shrub');
+  const flowerPlants = plants.filter((p) => p.type === 'flower');
+  if (fiberPlants.length < 20) throw new Error('too few fiber tufts: ' + fiberPlants.length);
+  if (shrubPlants.length < 15) throw new Error('too few jungle shrubs: ' + shrubPlants.length);
+  if (flowerPlants.length < 25) throw new Error('too few flowers: ' + flowerPlants.length);
+  if (fiberPlants.some((p) => p.h < 0.5 || p.h > 5.5)) throw new Error('fiber outside its height band');
+  if (shrubPlants.some((p) => p.h < 7 || p.h > 14)) throw new Error('shrub outside its height band');
+  if (flowerPlants.some((p) => p.h < 1.5 || p.h > 15)) throw new Error('flower outside its height band');
+  for (let i = 0; i < fiberPlants.length; i++)
+    for (let j = i + 1; j < fiberPlants.length; j++)
+      if (Math.hypot(fiberPlants[i].x - fiberPlants[j].x, fiberPlants[i].z - fiberPlants[j].z) < 4)
+        throw new Error('two fiber tufts closer than minDist');
+  const readyFrac = plants.filter((p) => p.state === 'ready').length / plants.length;
+  if (readyFrac < 0.3) throw new Error('too few ready plants on day 1: ' + readyFrac);
+
+  // instanced meshes sized per species
+  if (plantMesh.tuft.count !== fiberPlants.length * 3) throw new Error('tuft mesh count wrong: ' + plantMesh.tuft.count);
+  if (plantMesh.shrub.count !== shrubPlants.length) throw new Error('shrub mesh count wrong');
+  if (plantMesh.head.count !== flowerPlants.length) throw new Error('flower head count wrong');
+
+  // determinism: the first fiber spawn must be reproducible from the species' private stream
+  {
+    const def = PLANT_TYPES.fiber;
+    const r = mulberry32(SEED + def.seedOffset);
+    let first = null, tries = 0;
+    while (!first && tries++ < 4000) {
+      const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * ISLAND_R * 0.96;
+      const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+      if (heightAt(x, z) < def.hmin || heightAt(x, z) > def.hmax) continue;
+      first = { x, z };
+    }
+    if (Math.abs(first.x - fiberPlants[0].x) > 1e-9 || Math.abs(first.z - fiberPlants[0].z) > 1e-9)
+      throw new Error('fiber spawn not reproducible from its private stream');
+  }
+
+  // harvest: uncontested ready tuft -> E -> +1 fiber, charge down, deplete at 0
+  let F0 = null;
+  outer7: for (const p of fiberPlants) {
+    if (p.state !== 'ready' || p.chargesLeft !== PLANT_TYPES.fiber.charges || p.h < 0.35) continue;
+    if (palms.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 3.5)) continue;
+    if (crabs.some((c) => c.alive && Math.hypot(c.x - p.x, c.z - p.z) < 1.5)) continue;
+    if (fires.some((f) => Math.hypot(f.x - p.x, f.z - p.z) < 2.5)) continue;
+    if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - p.x, i.z - p.z) < 1.6)) continue;
+    F0 = p; break outer7;
+  }
+  if (!F0) throw new Error('no uncontested ready fiber tuft for the harvest test');
+  const tuftSets0 = plantMesh.tuft._count || 0;
+  rig.position.set(F0.x, Math.max(F0.h, WATER - 0.25), F0.z);
+  const fiber0 = INV.fiber;
+  actUse();
+  if (INV.fiber !== fiber0 + 1) throw new Error('fiber harvest did not land in inventory: ' + INV.fiber);
+  if (F0.chargesLeft !== PLANT_TYPES.fiber.charges - 1) throw new Error('fiber charge not decremented');
+  if (!learned.has('fiber')) throw new Error('fiber learn entry missing');
+  while (F0.state === 'ready') actUse();
+  if (F0.state !== 'depleted' || F0.chargesLeft !== 0)
+    throw new Error('tuft should deplete at 0 charges: ' + F0.state + '/' + F0.chargesLeft);
+  if ((plantMesh.tuft._count || 0) < tuftSets0 + 3) throw new Error('tuft matrix not re-emitted on depletion');
+
+  // context hint fires at a ready harvestable plant
+  let FH = null;
+  outer8: for (const p of fiberPlants) {
+    if (p.state !== 'ready' || p.h < 0.35) continue;
+    if (palms.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 3.5)) continue;
+    if (crabs.some((c) => c.alive && Math.hypot(c.x - p.x, c.z - p.z) < 1.5)) continue;
+    if (fires.some((f) => Math.hypot(f.x - p.x, f.z - p.z) < 2.5)) continue;
+    if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - p.x, i.z - p.z) < 1.6)) continue;
+    if (tigers.some((t) => (t.state === 'stalk' || t.state === 'chase') && Math.hypot(t.x - p.x, t.z - p.z) < 12)) continue;
+    FH = p; break outer8;
+  }
+  if (!FH) throw new Error('no uncontested ready fiber tuft for the hint test');
+  rig.position.set(FH.x, Math.max(FH.h, WATER - 0.25), FH.z);
+  if (!/harvest/.test(contextHint())) throw new Error('harvest context hint missing: ' + contextHint());
+
+  // drop:null markers are not harvestable
+  let FM = null;
+  outer9: for (const p of flowerPlants) {
+    if (p.state !== 'ready' || p.h < 0.35) continue;
+    if (palms.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 3.5)) continue;
+    if (fiberPlants.some((q) => q.state === 'ready' && Math.hypot(q.x - p.x, q.z - p.z) < 1.6)) continue;
+    FM = p; break outer9;
+  }
+  if (FM) {
+    rig.position.set(FM.x, Math.max(FM.h, WATER - 0.25), FM.z);
+    const fB = INV.fiber, st = FM.state;
+    actUse();
+    if (FM.state !== st || INV.fiber !== fB) throw new Error('drop:null flower should not be harvestable');
+  }
+
+  // growth is game-minute driven: one big jump (like actSleep's) fast-forwards everything
+  gameMin = 0; pump(1);
+  const G0 = fiberPlants.find((p) => p.state === 'growing');
+  if (!G0) throw new Error('no growing fiber tuft left for the growth test');
+  gameMin += 3000; pump(1);
+  if (G0.state !== 'ready') throw new Error('growing tuft should be ready after a full regrow: ' + G0.state);
+  if (F0.state !== 'ready' || F0.chargesLeft !== PLANT_TYPES.fiber.charges)
+    throw new Error('depleted tuft should regrow and reset charges: ' + F0.state + '/' + F0.chargesLeft);
+
+  // pre-M7 world untouched
+  if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100) throw new Error('pre-M7 vegetation counts changed');
+  if (crabs.length !== 9 || gulls.length !== 5 || tigers.length !== 3 || schools.length !== 5)
+    throw new Error('pre-M7 populations changed');
 }
 `;
 const file = join(here, '.game-smoke.mjs');
