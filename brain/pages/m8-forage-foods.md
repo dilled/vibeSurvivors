@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [foraging, plants, food, poison, cooking, determinism]
 created: "2026-10-17T18:48:04"
-updated: "2026-10-17T18:48:42"
+updated: "2026-10-17T19:11:35"
 ---
 
 <!-- compiled_truth -->
@@ -59,3 +59,9 @@ Per-kind instanced-mesh sizes and unique slot allocation (fiber keeps M7 0-based
   summary: "M8 shipped in d1594ef: 7 new PLANT_TYPES rows + 9 INV keys + Q/eatGathered/vomit/poisonDrain + table-driven cook + per-kind slot allocation + 2nd HUD food line in index.html, M8 smoke block in smoke/run.mjs; PLAN.md M8 marked done"
   source: git
   affects: [m8-forage-foods]
+
+- time: 2026-10-17T19:11:35
+  kind: note
+  summary: "M9 cross-cut: the new herb inventory key is deliberately NOT in VEG_EAT_ORDER (medicine, not food) ‒ Q's risk/reward eat order is unchanged; herb use has its own M key"
+  source: "git 742bfa1; see m9-medicinal-plants"
+  affects: [m8-forage-foods, m9-medicinal-plants]

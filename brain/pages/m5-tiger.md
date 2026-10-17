@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [tiger, night, predator, threat]
 created: "2026-10-17T17:12:47"
-updated: "2026-10-17T17:13:23"
+updated: "2026-10-17T19:11:18"
 ---
 
 <!-- compiled_truth -->
@@ -63,3 +63,9 @@ M5 is the first concrete entry of the animal ecosystem: it proves the read-and-c
   summary: "M5 shipped in 98569cc: tiger FSM block + updateTigers in index.html, threat context hints, smoke/run.mjs M5 block; PLAN.md M5 marked done"
   source: git 98569cc13c8d4e751b233962c6808feb5db5287d
   affects: [m5-tiger]
+
+- time: 2026-10-17T19:11:18
+  kind: note
+  summary: "M9 cross-cut: the tiger contact strike now also sets infectedWound (persistent 0.1 hp/s real-second bleed, cured only by the M9 healing herb via M) in addition to the original -30 health + loot drop; strike also drops carried herbs"
+  source: "git 742bfa1; see m9-medicinal-plants"
+  affects: [m5-tiger, m9-medicinal-plants]
