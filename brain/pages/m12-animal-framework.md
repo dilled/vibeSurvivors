@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [animals, framework, registry, determinism, architecture]
 created: "2026-10-17T20:43:56"
-updated: "2026-10-17T20:44:19"
+updated: "2026-10-17T21:21:07"
 ---
 
 <!-- compiled_truth -->
@@ -53,3 +53,9 @@ The four pre-M12 species are registered as reference entries with unchanged beha
   summary: "Created page from M12 commit c6ade32: animal registry + shared behaviour foundation"
   source: "commit c6ade32 (M12)"
   affects: [m12-animal-framework]
+
+- time: 2026-10-17T21:21:07
+  kind: note
+  summary: "M13 (commit e85ab49) registered monkeys, lizards, snakes via this registry (4 -> 7 species, all 'late', after the gulls); framework contract unchanged, frame() untouched; see [[m13-land-wildlife]]"
+  source: "commit e85ab49 (M13)"
+  affects: [m13-land-wildlife]
