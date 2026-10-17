@@ -1161,6 +1161,7 @@ patched += `
   // leave a clean state (M11)
   setWeatherDebug('clear');
   stats.wet = 0;
+  alarms.length = 0;   // M16: drain the alarm bus at the block boundary
 
   /* ---- M12: animal framework (registry + shared behaviour helpers) ---- */
   {
@@ -1211,6 +1212,7 @@ patched += `
 
   // leave a clean state (M12)
   setWeatherDebug('clear');
+  alarms.length = 0;   // M16: drain the alarm bus at the block boundary
 
   /* ---- M13: land wildlife (monkeys + large lizards + snakes) ---- */
   {
@@ -1272,6 +1274,7 @@ patched += `
         throw new Error('M13: dawn monkey should shriek with a tiger near its home');
       m0.screamT = sS; m0.scareT = sSc;
       t0.x = sT.x; t0.z = sT.z; t0.state = sT.state; t0.panicT = sT.panicT;
+      alarms.length = 0;   // M16: drain the shriek alarm before the crab hunt below
       park(camp.x, camp.z);
     }
 
@@ -1383,6 +1386,7 @@ patched += `
     setWeatherDebug('clear');
     pAt(0.33);
     stats.health = 100;
+    alarms.length = 0;   // M16: drain the alarm bus at the block boundary
   }
 
   /* ---- M14: seagulls + pelicans + expanded crabs ---- */
@@ -1565,6 +1569,7 @@ patched += `
       p.dir = pelicanSnap[i].dir;
     });
     monkeys.forEach((m, i) => { m.stealCd = monkeySnap[i]; });
+    alarms.length = 0;   // M16: drain the alarm bus at the block boundary
   }
 
   /* ---- M15: sharks + expanded fish ecosystem ---- */
@@ -1705,7 +1710,7 @@ patched += `
       const startN = s0.n = Math.max(s0.n, 3);
       spear = true; strikeCd = 0; infectedWound = false;
       sharks.forEach((s) => { s.atkCd = 999; });
-      park(s0.bx, s0.bz);
+      park(s0.x, s0.z);   // live school position: the M16 alarm scatter can displace it from home
       pAt(0.658); pump(2);   // the previous-frame dayFactor enters the [0.25, 0.5) band
       if (dayFactor < 0.25 || dayFactor >= 0.5) throw new Error('M15: the test clock left the dawn/dusk band: ' + dayFactor);
       const b1 = INV.fishRaw;
@@ -1739,6 +1744,156 @@ patched += `
     });
     gulls.forEach((g, i) => { g.diveTell = gullTellSnap[i]; });
     gullDiveCd = gullCdSnap;
+    alarms.length = 0;   // M16: drain the alarm bus at the block boundary
+  }
+
+  /* ---- M16: animal alarm bus + cross-species reactions ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
+    const crabSnap = crabs.map((c) => ({ fleeT: c.fleeT, dir: c.dir }));
+    const monkeySnap = monkeys.map((m) => ({ screamT: m.screamT, scareT: m.scareT,
+                                             scareX: m.scareX, scareZ: m.scareZ,
+                                             alertT: m.alertT, alertX: m.alertX, alertZ: m.alertZ }));
+    const lizardSnap = lizards.map((l) => ({ scareT: l.scareT, scareX: l.scareX, scareZ: l.scareZ }));
+    const snakeSnap = snakes.map((s) => s.freezeT);
+    const pelicanSnap = pelicans.map((p) => ({ fleeT: p.fleeT, fleeX: p.fleeX, fleeZ: p.fleeZ }));
+    const sharkSnap = sharks.map((s) => ({ x: s.x, z: s.z, dir: s.dir, state: s.state,
+                                           tellT: s.tellT, atkCd: s.atkCd, fleeT: s.fleeT,
+                                           fleeX: s.fleeX, fleeZ: s.fleeZ }));
+    const schoolSnap = schools.map((s) => ({ x: s.x, z: s.z, scT: s.scT, scX: s.scX, scZ: s.scZ }));
+    const tigerSnap = tigers.map((t) => ({ x: t.x, z: t.z, state: t.state,
+                                           panicT: t.panicT, panicX: t.panicX, panicZ: t.panicZ }));
+    const gullWaterSnap = gullWaterT;
+    const infSnap = infectedWound;
+    pAt(0.33); pump(2);
+    stats.health = 100; stats.thirst = 100; stats.hunger = 100; infectedWound = false;
+
+    // 1. primitives: raise, coverage, expiration
+    if (typeof alarmRaise !== 'function' || typeof alarmsNear !== 'function' ||
+        typeof updateAlarms !== 'function' || !Array.isArray(alarms))
+      throw new Error('M16: the alarm bus primitives are missing');
+    alarms.length = 0;
+    alarmRaise('scream', 0, 0, 20, 2);
+    if (!alarmsNear(5, 5, ['scream']))
+      throw new Error('M16: alarmsNear should find a covering scream alarm');
+    if (alarmsNear(30, 0, ['scream']))
+      throw new Error('M16: alarmsNear must not reach outside the alarm radius');
+    pump(180);   // 3 s: the 2 s alarm must be gone
+    if (alarms.some((a) => a.kind === 'scream' && a.x === 0 && a.z === 0))
+      throw new Error('M16: the alarm should expire after its duration');
+    alarms.length = 0;
+
+    // 2. cross-reactions from a raised alarm (crab / lizard / snake / pelican)
+    {
+      const c0 = crabs.find((c) => c.alive);
+      if (!c0) throw new Error('M16: no living crab to test');
+      alarmRaise('scream', c0.x, c0.z, 20, 4);
+      pump(2);
+      if (!(c0.fleeT > 0)) throw new Error('M16: the crab should bolt from a scream alarm');
+      if (!learned.has('crabalarm')) throw new Error('M16: the crab alarm should teach the tell');
+    }
+    {
+      const l0 = lizards[0];
+      alarms.length = 0;
+      alarmRaise('attack', l0.x, l0.z, 20, 4);
+      pump(2);
+      if (!(l0.scareT > 0)) throw new Error('M16: the lizard should be spooked by an attack alarm');
+    }
+    {
+      const s0 = snakes[0];
+      alarms.length = 0;
+      alarmRaise('alert', s0.x, s0.z, 25, 4);
+      pump(2);
+      if (!(s0.freezeT > 0)) throw new Error('M16: the snake should freeze at an alert alarm');
+    }
+    {
+      const p0 = pelicans[0];
+      alarms.length = 0;
+      alarmRaise('scream', p0.x, p0.z, 30, 4);
+      pump(2);
+      if (!(p0.fleeT > 0)) throw new Error('M16: the pelican should flee a scream alarm');
+    }
+
+    // 3. monkey shriek emission: the tell moment rings a 'scream' at the monkey
+    pAt(0.008); pump(2);
+    alarms.length = 0;
+    {
+      const m0 = monkeys[1];
+      park(camp.x, camp.z);   // 60u+ from every tiger home (M13 pattern)
+      const t0 = tigers[0];
+      m0.screamT = 0; m0.scareT = 0; m0.alertT = 0;
+      t0.x = m0.hx + 3; t0.z = m0.hz; t0.state = 'patrol';
+      pump(3);
+      if (!alarms.some((a) => a.kind === 'scream' &&
+          Math.hypot(a.x - m0.x, a.z - m0.z) < 2))
+        throw new Error('M16: the monkey shriek should raise a scream alarm at the monkey');
+      t0.x = tigerSnap[0].x; t0.z = tigerSnap[0].z; t0.state = tigerSnap[0].state;
+      monkeys.forEach((m) => { m.screamT = 0; m.alertT = 0; });
+      alarms.length = 0;
+      park(spawn.x, spawn.z);
+    }
+
+    // 4. curious-shark emission + fish scatter (M15 pattern)
+    pAt(0.33); pump(2);
+    alarms.length = 0;
+    {
+      const s0 = sharks[0];
+      const sx = schools[0];
+      park(sx.bx, sx.bz);   // the school home is shallow water
+      s0.x = sx.bx + 6; s0.z = sx.bz;
+      s0.state = 'patrol'; s0.fleeT = 0; s0.tellT = 0; s0.atkCd = 999;
+      sharks[1].atkCd = 999;
+      gullWaterT = 0;
+      pump(60);   // 1 s: the patrol->curious edge fires once
+      if (!(gullWaterT > 0))
+        throw new Error('M16: the M15 gull scream must stay alive: ' + gullWaterT);
+      const sharkScreams = alarms.filter((a) => a.kind === 'scream' &&
+          Math.hypot(a.x - (sx.bx + 6), a.z - sx.bz) < 2);
+      if (sharkScreams.length !== 1)
+        throw new Error('M16: the curious turn should raise exactly one scream alarm at the shark (edge, not per-frame): ' + sharkScreams.length);
+      if (!(sx.scT > 0)) throw new Error('M16: the school should scatter from the gull scream');
+      if (!learned.has('fishscatter')) throw new Error('M16: the scatter should teach the tell');
+      park(spawn.x, spawn.z);
+    }
+
+    // 5. panicWildlife emission: the M11 hook rings an 'alert' at the strike point
+    {
+      const x = spawn.x + 5, z = spawn.z;
+      alarms.length = 0;
+      panicWildlife(x, z);
+      if (!alarms.some((a) => a.kind === 'alert' &&
+          Math.hypot(a.x - x, a.z - z) < 0.5))
+        throw new Error('M16: panicWildlife should raise an alert alarm at the strike point');
+    }
+
+    // leave a clean state (M16)
+    alarms.length = 0;
+    park(spawn.x, spawn.z);
+    setWeatherDebug('clear');
+    pAt(0.33);
+    stats.health = 100;
+    infectedWound = infSnap;
+    gullWaterT = gullWaterSnap;
+    crabs.forEach((c, i) => { c.fleeT = crabSnap[i].fleeT; c.dir = crabSnap[i].dir; });
+    monkeys.forEach((m, i) => { const q = monkeySnap[i];
+      m.screamT = q.screamT; m.scareT = q.scareT; m.scareX = q.scareX; m.scareZ = q.scareZ;
+      m.alertT = q.alertT; m.alertX = q.alertX; m.alertZ = q.alertZ; });
+    lizards.forEach((l, i) => { const q = lizardSnap[i];
+      l.scareT = q.scareT; l.scareX = q.scareX; l.scareZ = q.scareZ; });
+    snakes.forEach((k, i) => { k.freezeT = snakeSnap[i]; });
+    pelicans.forEach((p, i) => { const q = pelicanSnap[i];
+      p.fleeT = q.fleeT; p.fleeX = q.fleeX; p.fleeZ = q.fleeZ; });
+    sharks.forEach((s, i) => { const q = sharkSnap[i];
+      s.x = q.x; s.z = q.z; s.dir = q.dir; s.state = q.state;
+      s.tellT = q.tellT; s.atkCd = q.atkCd; s.fleeT = q.fleeT;
+      s.fleeX = q.fleeX; s.fleeZ = q.fleeZ;
+      s.grp.scale.setScalar(1); });
+    schools.forEach((s, i) => { const q = schoolSnap[i];
+      s.x = q.x; s.z = q.z; s.scT = q.scT; s.scX = q.scX; s.scZ = q.scZ; });
+    tigers.forEach((t, i) => { const q = tigerSnap[i];
+      t.x = q.x; t.z = q.z; t.state = q.state;
+      t.panicT = q.panicT; t.panicX = q.panicX; t.panicZ = q.panicZ; });
   }
 }
 `;
