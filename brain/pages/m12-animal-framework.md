@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [animals, framework, registry, determinism, architecture]
 created: "2026-10-17T20:43:56"
-updated: "2026-10-17T22:00:48"
+updated: "2026-10-17T22:26:23"
 ---
 
 <!-- compiled_truth -->
@@ -65,3 +65,9 @@ The four pre-M12 species are registered as reference entries with unchanged beha
   summary: "M14 (commit 6665b91) registered the pelican as registry slot 7 (7 -> 8 species, 'late', after the snakes) and grew crabs 9 -> 15; framework contract unchanged, frame() untouched; see [[m14-beach-air-wildlife]]"
   source: "commit 6665b91 (M14)"
   affects: [m14-beach-air-wildlife]
+
+- time: 2026-10-17T22:26:23
+  kind: note
+  summary: "M15 (commit 567fd76) registered the sharks as registry slot 8 ('early' water phase, after the M14 pelican; 8 -> 9 species) and extended panicWildlife with shark flee; framework contract unchanged, frame() untouched; see [[m15-sharks-fish-ecosystem]]"
+  source: "commit 567fd76 (M15)"
+  affects: [m15-sharks-fish-ecosystem]
