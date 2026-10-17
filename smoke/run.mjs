@@ -90,7 +90,7 @@ patched += `
   // world placements are seeded
   if (schools.length !== 5) throw new Error('expected 5 fish schools: ' + schools.length);
   if (schools.some((s) => s.n < 8 || s.n > 13)) throw new Error('fish school size out of band');
-  if (crabs.length !== 9) throw new Error('expected 9 crabs (6 beach + 3 M6 extras): ' + crabs.length);
+  if (crabs.length !== 15) throw new Error('expected 15 crabs (6 beach + 3 M6 + 6 M14): ' + crabs.length);
 
   // stats tick down in real time; clock advances
   const th0 = stats.thirst, hu0 = stats.hunger, gm0 = gameMin;
@@ -412,11 +412,11 @@ patched += `
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
   firstNight = true;   // suppress the scripted beat until its dedicated test
 
-  // populations: 5 gulls in the beach/grass band; 6 beach + 3 extra crabs
+  // populations: 5 gulls in the beach/grass band; 6 beach + 3 M6 + 6 M14 crabs
   if (gulls.length !== 5) throw new Error('expected 5 gulls: ' + gulls.length);
   if (gulls.some((g) => heightAt(g.hx, g.hz) < 0.3 || heightAt(g.hx, g.hz) > 6))
     throw new Error('gull home outside the beach/grass band');
-  if (crabs.length !== 9) throw new Error('expected 6 + 3 extra crabs: ' + crabs.length);
+  if (crabs.length !== 15) throw new Error('expected 6 + 3 + 6 crabs: ' + crabs.length);
 
   // day: every gull is airborne and moving (hover-wander around home)
   rig.position.set(spawn.x, Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25), spawn.z);
@@ -626,7 +626,7 @@ patched += `
 
   // pre-M7 world untouched
   if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100) throw new Error('pre-M7 vegetation counts changed');
-  if (crabs.length !== 9 || gulls.length !== 5 || tigers.length !== 3 || schools.length !== 5)
+  if (crabs.length !== 15 || gulls.length !== 5 || tigers.length !== 3 || schools.length !== 5)
     throw new Error('pre-M7 populations changed');
 
   /* ---- M8: edible + poisonous plants (forage, Q eating, vomit/drain, cook) ---- */
@@ -1175,8 +1175,8 @@ patched += `
     //    order, bound to the canonical arrays with the unchanged pre-M12
     //    populations. M13 registers 3 more (slots 4-6, asserted in the M13
     //    block) so the total is 7.
-    if (animals.length !== 7) throw new Error('M12: expected 7 registered species (4 reference + 3 M13), got ' + animals.length);
-    const want = [['fish', schools, 5, 'early'], ['crab', crabs, 9, 'early'],
+    if (animals.length !== 8) throw new Error('M12: expected 8 registered species (4 reference + 3 M13 + 1 M14), got ' + animals.length);
+    const want = [['fish', schools, 5, 'early'], ['crab', crabs, 15, 'early'],
                   ['tiger', tigers, 3, 'late'], ['gull', gulls, 5, 'late']];
     want.forEach(([id, pop, n, phase], i) => {
       const sp = animals[i];
@@ -1218,7 +1218,7 @@ patched += `
     const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
 
     // 1. registry: the three M13 species after the gulls, 'late', canonical arrays
-    if (animals.length !== 7) throw new Error('M13: expected 7 registered species, got ' + animals.length);
+    if (animals.length !== 8) throw new Error('M13: expected 8 registered species, got ' + animals.length);
     const want = [['monkey', monkeys, 5], ['lizard', lizards, 4], ['snake', snakes, 6]];
     want.forEach(([id, pop, n], j) => {
       const sp = animals[4 + j];
@@ -1383,6 +1383,188 @@ patched += `
     setWeatherDebug('clear');
     pAt(0.33);
     stats.health = 100;
+  }
+
+  /* ---- M14: seagulls + pelicans + expanded crabs ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const pAt = (p) => setClockP(((p - gameMin / 1800) % 1 + 1) % 1);
+    const invSnap = { ...INV };
+    const schoolSnap = schools.map((s) => s.n);
+    const crabSnap = crabs.map((c) => c.alive);
+    const nestSnap = gullNest.eggs;
+    const angerSnap = gullAngerUntil;
+    const mobSnap = { x: pelicanFishX, z: pelicanFishZ, t: pelicanFishT };
+    const pelicanSnap = pelicans.map((p) => ({ x: p.x, z: p.z, stealT: p.stealT, stealCd: p.stealCd,
+                                               diveCd: p.diveCd, fleeT: p.fleeT, fleeX: p.fleeX, fleeZ: p.fleeZ, dir: p.dir }));
+    const monkeySnap = monkeys.map((m) => m.stealCd);
+
+    // 1. registry: slot 7 is the pelican (M12/M13 slots untouched); crabs number 15
+    if (animals.length !== 8) throw new Error('M14: expected 8 registered species, got ' + animals.length);
+    const psp = animals[7];
+    if (!psp || psp.id !== 'pelican' || psp.pop !== pelicans || psp.pop.length !== 3 ||
+        psp.phase !== 'late' || typeof psp.step !== 'function')
+      throw new Error('M14: registry slot 7 must be the pelican descriptor');
+    if (crabs.length !== 15) throw new Error('M14: crabs must number 15, got ' + crabs.length);
+
+    // 2. pelican homes: a palm crown or a shallows anchor
+    for (const p of pelicans) {
+      const onPalm = palms.some((pm) => pm.top[0] === p.hx && pm.top[2] === p.hz &&
+        Math.abs(pm.top[1] - p.perch[1]) < 0.01);
+      if (!onPalm && heightAt(p.hx, p.hz) > -0.2) throw new Error('M14: pelican home is neither a palm crown nor shallows');
+    }
+
+    // 3. gull nest: 3 eggs, cliff band, 60u+ from spawn
+    if (!gullNest || gullNest.eggs !== 3 || gullNest.eggMeshes.length !== 3)
+      throw new Error('M14: the gull nest must hold 3 eggs');
+    if (heightAt(gullNest.x, gullNest.z) < 16) throw new Error('M14: the gull nest must sit on the cliff band');
+    if (Math.hypot(gullNest.x - spawn.x, gullNest.z - spawn.z) < 60) throw new Error('M14: the gull nest must be 60u+ from spawn');
+
+    // 4. pelican deep-dive: takes one fish, sets the gull-mob point, teaches the tell
+    pAt(0.33); pump(2);
+    {
+      const s0 = schools.find((s) => s.n > 0);
+      if (!s0) throw new Error('M14: no fish school for the dive test');
+      const p0 = pelicans[0];
+      const sInv = INV.fishRaw;
+      const sG = gulls.map((gu) => gu.stealCd);
+      const sD = [pelicans[1].diveCd, pelicans[2].diveCd];
+      gulls.forEach((gu) => { gu.stealCd = GULL_STEAL_CD; });   // no gull interference
+      pelicans[1].diveCd = PELICAN_DIVE_CD; pelicans[2].diveCd = PELICAN_DIVE_CD;   // p0 is the only diver
+      const n0 = s0.n;
+      p0.diveCd = 0; p0.stealT = 0; p0.stealCd = PELICAN_STEAL_CD; p0.fleeT = 0;
+      p0.x = s0.x + 2; p0.z = s0.z;
+      park(camp.x, camp.z);
+      pump(200);   // ~3.3 s: the 2 u flight + the strike
+      if (s0.n !== n0 - 1) throw new Error('M14: the pelican dive should take exactly one fish: ' + s0.n);
+      if (pelicanFishT <= 0) throw new Error('M14: the dive should set the gull-mob point');
+      if (!learned.has('pelicandive')) throw new Error('M14: the dive should teach the fish-finder tell');
+      INV.fishRaw = sInv;
+      gulls.forEach((gu, i) => { gu.stealCd = sG[i]; });
+      pelicans[1].diveCd = sD[0]; pelicans[2].diveCd = sD[1];
+    }
+
+    // 5. gull-vs-pelican: while the mob point is live, a gull converges on it
+    {
+      park(camp.x, camp.z);
+      const gu = gulls[0];
+      const sG = { x: gu.x, z: gu.z, stealCd: gu.stealCd, diveTell: gu.diveTell };
+      const sCd = gullDiveCd;
+      gullDiveCd = GULL_DIVE_CD;   // keep the dive FSM from freezing the gull mid-mob
+      gu.stealCd = GULL_STEAL_CD; gu.diveTell = 0;
+      pelicanFishX = gu.x + 10; pelicanFishZ = gu.z; pelicanFishT = 4;
+      pump(60);   // 1 s at 8.5 u/s
+      const dNow = Math.hypot(pelicanFishX - gu.x, pelicanFishZ - gu.z);
+      if (dNow > 5) throw new Error('M14: the gull should mob the fish point, still ' + dNow.toFixed(1) + 'u away');
+      if (!learned.has('gullmob')) throw new Error('M14: the mob should teach the tell');
+      gu.x = sG.x; gu.z = sG.z; gu.stealCd = sG.stealCd; gu.diveTell = sG.diveTell;
+      gullDiveCd = sCd;
+    }
+
+    // 6. pelican hand-steal: 1.2 s hover; without Space the fish goes, with Space it stays
+    pAt(0.33); pump(2);
+    {
+      const p0 = pelicans[0];
+      const sInv = INV.fishRaw;
+      const sG = gulls.map((gu) => gu.stealCd);
+      const sM = monkeys.map((m) => m.stealCd);
+      gulls.forEach((gu) => { gu.stealCd = GULL_STEAL_CD; });
+      monkeys.forEach((m) => { m.stealCd = MONKEY_STEAL_CD; });
+      pelicans[1].stealCd = PELICAN_STEAL_CD; pelicans[2].stealCd = PELICAN_STEAL_CD;
+      INV.fishRaw = 1;
+      p0.stealCd = 0; p0.stealT = 0; p0.fleeT = 0; p0.diveCd = PELICAN_DIVE_CD;
+      park(p0.x, p0.z);
+      pump(90);   // ~1.5 s: the 1.2 s telegraph runs out without Space
+      if (INV.fishRaw !== 0) throw new Error('M14: the pelican should take the raw fish: ' + INV.fishRaw);
+      if (!learned.has('pelican')) throw new Error('M14: the steal should teach the tell');
+      INV.fishRaw = 1;
+      p0.stealCd = 0; p0.stealT = PELICAN_STEAL_T;   // force mid-telegraph
+      keys['Space'] = true;
+      pump(3);
+      keys['Space'] = false;
+      if (INV.fishRaw !== 1) throw new Error('M14: Space should keep the fish: ' + INV.fishRaw);
+      if (!learned.has('pelicansteal')) throw new Error('M14: the counter should teach the tell');
+      INV.fishRaw = sInv;
+      gulls.forEach((gu, i) => { gu.stealCd = sG[i]; });
+      monkeys.forEach((m, i) => { m.stealCd = sM[i]; });
+      park(camp.x, camp.z);
+    }
+
+    // 7. gull nest egg: E takes one, the flock is angry for a visible day
+    {
+      park(camp.x, camp.z);   // far from any gull home
+      const sEggs = gullNest.eggs, sAnger = gullAngerUntil, sInv = INV.gullEgg;
+      const sG = gulls.map((gu) => gu.stealCd);
+      gulls.forEach((gu) => { gu.stealCd = GULL_STEAL_CD; });
+      park(gullNest.x, gullNest.z);
+      actUse();
+      if (INV.gullEgg !== sInv + 1) throw new Error('M14: the nest should give a gull egg: ' + INV.gullEgg);
+      if (gullNest.eggs !== sEggs - 1) throw new Error('M14: the nest should lose one egg: ' + gullNest.eggs);
+      if (gullNest.eggMeshes[sEggs - 1].visible !== false)
+        throw new Error('M14: the taken egg should be hidden in the nest');
+      if (!(gullAngerUntil > gameMin)) throw new Error('M14: taking the egg should enrage the flock: ' + gullAngerUntil);
+      if (!learned.has('gullegg')) throw new Error('M14: the egg should teach the tell');
+      INV.gullEgg = sInv;
+      gullNest.eggs = sEggs;
+      gullNest.eggMeshes.forEach((m, i) => { m.visible = i < sEggs; });
+      gullAngerUntil = sAnger;
+      gulls.forEach((gu, i) => { gu.stealCd = sG[i]; });
+      park(camp.x, camp.z);
+    }
+
+    // 8. crabs hide from a live big lizard (their hiding = a lizard is close)
+    {
+      const l0 = lizards[0];
+      const cc = crabs.find((c) => c.alive);
+      if (!cc) throw new Error('M14: no living crab for the hide test');
+      const sC = { x: cc.x, z: cc.z, fleeT: cc.fleeT, dir: cc.dir };
+      cc.x = l0.x + 2; cc.z = l0.z; cc.fleeT = 0;
+      pump(3);
+      if (!(cc.fleeT > 0)) throw new Error('M14: a crab within ' + CRAB_HIDE_R + 'u of a lizard should scuttle to hide: ' + cc.fleeT);
+      if (!learned.has('crabhide')) throw new Error('M14: the hide should teach the tell');
+      cc.x = sC.x; cc.z = sC.z; cc.fleeT = sC.fleeT; cc.dir = sC.dir;
+    }
+
+    // 9. panicWildlife startles the pelicans (M12/M13 effects untouched)
+    {
+      const p0 = pelicans[1];
+      const sP = { t: p0.fleeT, x: p0.fleeX, z: p0.fleeZ };
+      const sT = tigers.map((t) => ({ panicT: t.panicT, panicX: t.panicX, panicZ: t.panicZ }));
+      const sG = gullPanicT;
+      const sC = crabs.map((c) => c.fleeT);
+      const sM = monkeys.map((m) => m.scareT);
+      const sL = lizards.map((l) => l.scareT);
+      const sS = snakes.map((s) => s.freezeT);
+      panicWildlife(p0.x, p0.z);
+      if (!(p0.fleeT > 0)) throw new Error('M14: panicWildlife should startle the pelican');
+      p0.fleeT = sP.t; p0.fleeX = sP.x; p0.fleeZ = sP.z;
+      tigers.forEach((t, i) => { t.panicT = sT[i].panicT; t.panicX = sT[i].panicX; t.panicZ = sT[i].panicZ; });
+      gullPanicT = sG;
+      crabs.forEach((c, i) => { c.fleeT = sC[i]; });
+      monkeys.forEach((m, i) => { m.scareT = sM[i]; });
+      lizards.forEach((l, i) => { l.scareT = sL[i]; });
+      snakes.forEach((s, i) => { s.freezeT = sS[i]; });
+    }
+
+    // leave a clean state (M14)
+    park(spawn.x, spawn.z);
+    setWeatherDebug('clear');
+    pAt(0.33);
+    stats.health = 100;
+    Object.assign(INV, invSnap);
+    gullAngerUntil = angerSnap;
+    pelicanFishX = mobSnap.x; pelicanFishZ = mobSnap.z; pelicanFishT = mobSnap.t;
+    schools.forEach((s, i) => { s.n = schoolSnap[i]; s.mesh.count = s.n; });
+    crabs.forEach((c, i) => { c.alive = crabSnap[i]; c.grp.visible = c.alive; });
+    gullNest.eggs = nestSnap;
+    gullNest.eggMeshes.forEach((m, i) => { m.visible = i < nestSnap; });
+    pelicans.forEach((p, i) => {
+      p.x = pelicanSnap[i].x; p.z = pelicanSnap[i].z;
+      p.stealT = pelicanSnap[i].stealT; p.stealCd = pelicanSnap[i].stealCd; p.diveCd = pelicanSnap[i].diveCd;
+      p.fleeT = pelicanSnap[i].fleeT; p.fleeX = pelicanSnap[i].fleeX; p.fleeZ = pelicanSnap[i].fleeZ;
+      p.dir = pelicanSnap[i].dir;
+    });
+    monkeys.forEach((m, i) => { m.stealCd = monkeySnap[i]; });
   }
 }
 `;

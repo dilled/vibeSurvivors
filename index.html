@@ -77,10 +77,11 @@
   <div class="card">
     <div class="row"><span>move / sprint</span><b>W A S D &middot; Shift</b></div>
     <div class="row"><span>use &mdash; drink / pick / shake / cook / catch</span><b>E</b></div>
-    <div class="row"><span>eat &mdash; coconut / fish / crab / foraged</span><b>C &middot; F &middot; V &middot; Q</b></div>
+    <div class="row"><span>eat &mdash; coconut / fish / crab / egg / foraged</span><b>C &middot; F &middot; V &middot; Q</b></div>
     <div class="row"><span>make fire / make spear</span><b>G &middot; B</b></div>
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
+    <div class="row"><span>keep the fish from a hovering pelican</span><b>Space</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
     <div class="row"><span>sleep until dawn</span><b>Z</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
@@ -709,7 +710,8 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 const stats = { thirst: 100, hunger: 100, health: 100, wet: 0 };   /* M11: wet (rain/cold) */
 const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0,
               sweetpotato: 0, sweetpotatoCooked: 0, yam: 0, yamCooked: 0, banana: 0, wildberry: 0,
-              poisonberry: 0, poisonfern: 0, poisonyam: 0, herb: 0 };
+              poisonberry: 0, poisonfern: 0, poisonyam: 0, herb: 0,
+              gullEgg: 0, gullEggCooked: 0 };   /* M14: gull nest eggs */
 let dead = false, spear = false;
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
 
@@ -743,9 +745,9 @@ const HUNGER_RATE = 100 / 1320;  /* full -> empty in ~22 real minutes */
 
 /* M8: fire cooking is map-driven (M1 order preserved: fish first, then crab,
    then foraged cookables). Only fishRaw/crab/sweetpotato/yam cook. */
-const COOKABLE = ['fishRaw', 'crab', 'sweetpotato', 'yam'];
-const COOK_RESULT = { fishRaw: 'fishCooked', crab: 'crabCooked', sweetpotato: 'sweetpotatoCooked', yam: 'yamCooked' };
-const COOK_NAME = { fishRaw: 'fish', crab: 'crab', sweetpotato: 'sweet potato', yam: 'yam' };
+const COOKABLE = ['fishRaw', 'crab', 'sweetpotato', 'yam', 'gullEgg'];   /* M14: gull egg cooks */
+const COOK_RESULT = { fishRaw: 'fishCooked', crab: 'crabCooked', sweetpotato: 'sweetpotatoCooked', yam: 'yamCooked', gullEgg: 'gullEggCooked' };
+const COOK_NAME = { fishRaw: 'fish', crab: 'crab', sweetpotato: 'sweet potato', yam: 'yam', gullEgg: 'gull egg' };
 
 const journal = [];   /* M6: persisted at camp save */
 const learned = new Set();
@@ -874,6 +876,7 @@ function updateSchools(dt) {
 }
 
 /* ---- crabs: scuttle the beach, flee if you sprint, caught by hand ---- */
+const CRAB_HIDE_R = 8;   /* M14: hide-from-lizard tell radius */
 function buildCrabGroup(bodyMat, legMat) {
   const grp = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.26), bodyMat);
@@ -916,6 +919,17 @@ function updateCrabs(dt) {
     if (sprint && dist < 3.5) { c.fleeT = 1.6; c.dir = Math.atan2(dpx, dpz); }
     if (c.fleeT > 0) c.fleeT -= dt;
     else {
+      /* M14: a live big lizard hunting nearby makes the crab scuttle into
+         the sand and hide (their hiding = a lizard is close) */
+      for (const l of lizards) {
+        const dl = Math.hypot(l.x - c.x, l.z - c.z);
+        if (dl < CRAB_HIDE_R) {
+          c.fleeT = 2;
+          c.dir = Math.atan2(c.x - l.x, c.z - l.z);
+          learn('crabhide', 'crabs scuttle into the sand when a big lizard is hunting nearby');
+          break;
+        }
+      }
       c.turnT -= dt;
       if (c.turnT <= 0) {
         c.turnT = 0.9 + Math.random() * 1.4;
@@ -1120,6 +1134,7 @@ function updateTigers(dt) {
           INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
           INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
           INV.herb = 0;
+          INV.gullEgg = INV.gullEggCooked = 0;   /* M14 */
           infectedWound = true;
           learn('infection', 'tiger wounds fester \u2014 a healing herb will close them');
           toast('\u2620\uFE0F your wounds fester \u2014 find a healing herb (M)');
@@ -1147,6 +1162,7 @@ const GULL_SPEED = 8.5, GULL_ALT = 2.2;
 const GULL_WANDER = { f1: 0.11, f2: 0.13, rx: 20, rz: 16, homeR: 26, minStep: 1, pm: 1.6, speed: GULL_SPEED, still: 0 };   /* M12: shared home-wander params (still: hovers) */
 const GULL_STEAL_R = 12, GULL_STEAL_CD = 45;
 const GULL_DIVE_R = 15, GULL_DIVE_DMG = 8, GULL_DIVE_TELL = 3, GULL_DIVE_CD = 60;
+const GULL_DIVE_CD_ANGRY = 8, GULL_MOB_R = 25;   /* M14: nest-anger dive cadence + pelican-fish mob radius */
 const GULL_FOOD_ORDER = ['crabCooked', 'fishCooked', 'crab', 'fishRaw', 'coconut'];
 
 function buildGullMesh(x, g, z) {
@@ -1206,8 +1222,10 @@ function updateGulls(dt) {
   gullDiveCd = Math.max(0, gullDiveCd - dt);
   gullWaterT = Math.max(0, gullWaterT - dt);
   gullPanicT = Math.max(0, gullPanicT - dt);
+  pelicanFishT = Math.max(0, pelicanFishT - dt);   /* M14: the mob point decays */
   const carrying = GULL_FOOD_ORDER.some((k) => INV[k] > 0);
   const stormQuiet = stormQuietGulls();   /* M11 */
+  const angry = gullAngerUntil > 0 && gameMin < gullAngerUntil;   /* M14: a stolen egg, one visible day */
   for (const gu of gulls) {
     if (gu.stealCd > 0) gu.stealCd -= dt;
     let dir = gu.dir, speed = 0;
@@ -1221,22 +1239,31 @@ function updateGulls(dt) {
       if (hs > 0) { dir = gu.dir; speed = hs; }
     } else {
       /* day: deterministic sin/cos hover-wander around home (no rng per frame) */
-      if (gullWaterT > 0) {
-        /* the water is not safe: the flock screams and drifts inland */
-        dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z);
-        speed = GULL_SPEED * 0.6;
+      const mobD = pelicanFishT > 0 ? Math.hypot(pelicanFishX - gu.x, pelicanFishZ - gu.z) : Infinity;
+      if (mobD < GULL_MOB_R) {
+        /* M14: the gull-vs-pelican fight ‒ mob the fish the pelican just took */
+        dir = Math.atan2(pelicanFishX - gu.x, pelicanFishZ - gu.z);
+        speed = mobD > 1.5 ? GULL_SPEED : 0;
+        if (!learned.has('gullmob'))
+          learn('gullmob', 'gulls mob a pelican that has dived for fish \u2014 the fight shows where the fish were');
       } else {
-        const mv = homeWander(gu, GULL_WANDER);   /* M12: deterministic hover-wander (no rng per frame) */
-        dir = mv.dir;
-        speed = mv.speed;
-      }
-      /* steal: take exactly one carried food item, per-gull cooldown */
-      if (gu.stealCd <= 0 && carrying && Math.hypot(px - gu.x, pz - gu.z) < GULL_STEAL_R) {
-        const pick = GULL_FOOD_ORDER.find((k) => INV[k] > 0);
-        INV[pick]--;
-        gu.stealCd = GULL_STEAL_CD;
-        learn('gull', 'gulls snatch food you carry carelessly');
-        toast('\u{1F54A} a gull snatches your ' + pick + ' away');
+        if (gullWaterT > 0) {
+          /* the water is not safe: the flock screams and drifts inland */
+          dir = Math.atan2(gu.hx - gu.x, gu.hz - gu.z);
+          speed = GULL_SPEED * 0.6;
+        } else {
+          const mv = homeWander(gu, GULL_WANDER);   /* M12: deterministic hover-wander (no rng per frame) */
+          dir = mv.dir;
+          speed = mv.speed;
+        }
+        /* steal: take exactly one carried food item, per-gull cooldown */
+        if (gu.stealCd <= 0 && carrying && Math.hypot(px - gu.x, pz - gu.z) < GULL_STEAL_R) {
+          const pick = GULL_FOOD_ORDER.find((k) => INV[k] > 0);
+          INV[pick]--;
+          gu.stealCd = GULL_STEAL_CD;
+          learn('gull', 'gulls snatch food you carry carelessly');
+          toast('\u{1F54A} a gull snatches your ' + pick + ' away');
+        }
       }
       /* dive-bomb: 3 s screaming tell, then it rakes your head */
       if (gu.diveTell > 0) {
@@ -1244,7 +1271,9 @@ function updateGulls(dt) {
         speed = 0;
         if (gu.diveTell <= 0) {
           stats.health = Math.max(0, stats.health - GULL_DIVE_DMG);
-          gullDiveCd = GULL_DIVE_CD;
+          gullDiveCd = angry ? GULL_DIVE_CD_ANGRY : GULL_DIVE_CD;   /* M14: anger keeps the dives coming */
+          if (angry && !learned.has('gullanger'))
+            learn('gullanger', 'the gulls took an egg from their nest \u2014 they dive-bomb your head all day');
           toast('\u{1F54A} a gull rakes your head with its talons');
           checkDeath();
         }
@@ -1321,6 +1350,7 @@ function panicWildlife(x, z) {
   for (const m of monkeys) { m.scareT = 3; m.scareX = x; m.scareZ = z; }
   for (const l of lizards) { l.scareT = 3; l.scareX = x; l.scareZ = z; }
   for (const s of snakes) s.freezeT = 1.2;
+  for (const p of pelicans) { p.fleeT = 3; p.fleeX = x; p.fleeZ = z; }   /* M14 */
 }
 /* M12: run a phase of the animal registry. 'early' species (fish, crabs) run
    before weather/sky on the previous frame's dayFactor; 'late' species
@@ -1340,10 +1370,10 @@ registerAnimal({
 });
 registerAnimal({
   id: 'crab', label: 'crabs', pop: crabs, phase: 'early',
-  band: 'beach 0.35..1.5', count: 9, active: () => true,
+  band: 'beach 0.35..1.5', count: 15, active: () => true,   /* M14: 6 + 3 M6 + 6 M14 */
   speed: { walk: 1.0, flee: 2.3, nightK: 1.6 }, homeR: 9,
   step: (dt) => updateCrabs(dt),
-  tells: 'caught by hand (M1); sprint-flee; bolder at night (M6); scuttle from lightning (M11)',
+  tells: 'caught by hand (M1); sprint-flee; bolder at night (M6); scuttle from lightning (M11); hide when a big lizard hunts (M14)',
 });
 registerAnimal({
   id: 'tiger', label: 'tigers', pop: tigers, phase: 'late',
@@ -1358,7 +1388,7 @@ registerAnimal({
   speed: { fly: GULL_SPEED, perch: GULL_SPEED * 0.8 }, homeR: 26,
   terrainOK: (x, z) => heightAt(x, z) >= 0.3,
   step: (dt) => updateGulls(dt),
-  threat: 'steals one carried food, 3 s telegraphed dive (M6); storm-quiet (M11); water scare foreshadows the shark (M15)',
+  threat: 'steals one carried food, 3 s telegraphed dive (M6); storm-quiet (M11); water scare foreshadows the shark (M15); cliff-nest egg theft enrages the flock for a day, mob a pelican that dives for fish (M14)',
 });
 
 /* ---- monkeys (M13): jungle-edge daytime nuisance. Day+dusk/dawn active
@@ -1774,6 +1804,223 @@ registerAnimal({
   threat: 'reactive ambush only: stepped-on (<1.1u) or cornered (<1.5u), 0.8 s rear-up tell; venomous variant deals 18 (health, not death), harmless spits (M13)',
 });
 
+/* ---- M14: the beach/air ecosystem. The gulls get a cliff nest with eggs
+   (steal one and the flock dive-bombs your head for a visible day) and mob
+   a pelican that has just dived for a fish. Three pelicans (registry slot 7,
+   the last) perch on palms by day, deep-dive fish schools (a free fish
+   finder) and hover to steal a raw fish from your hand ‒ Space keeps it.
+   The crab population grows 9 -> 15, and crabs scuttle into the sand to
+   hide when a live big lizard is hunting nearby. All non-lethal, no new
+   lethal weapon. Spawn rng() calls live strictly AFTER the snake spawn
+   block (the last pre-M14 global-rng consumer) ‒ keep it that way. ---- */
+let gullNest = null;             /* {x,z,g,eggs,grp,eggMeshes} on the cliff band */
+let gullAngerUntil = 0;          /* gameMin: dive-bombing runs for one visible day */
+let pelicanFishX = 0, pelicanFishZ = 0, pelicanFishT = 0;   /* the gulls mob this point */
+
+/* M14: the gull nest ‒ one cliff platform, three eggs (E takes them) */
+const NEST_EGGS = 3;
+{
+  let x = 0, z = 0, tries = 0;
+  do {
+    tries++;
+    const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 0.9;
+    x = Math.cos(a) * r, z = Math.sin(a) * r;
+  } while (tries < 4000 && (heightAt(x, z) < 16 ||
+    Math.hypot(x - spawn.x, z - spawn.z) < 60));
+  const g = heightAt(x, z);
+  const grp = new THREE.Group();
+  const stick = new THREE.MeshLambertMaterial({ color: 0x7a5c38 });
+  const nestBody = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.7, 0.4, 8), stick);
+  nestBody.position.y = 0.2;
+  grp.add(nestBody);
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 0.95, 0.12, 8, 1, true), stick);
+  rim.position.y = 0.42;
+  grp.add(rim);
+  const eggGeo = new THREE.SphereGeometry(0.22, 8, 8);
+  const eggMat = new THREE.MeshLambertMaterial({ color: 0xf3ead2 });
+  const eggMeshes = [];
+  for (let i = 0; i < NEST_EGGS; i++) {
+    const egg = new THREE.Mesh(eggGeo, eggMat);
+    const a = i * 2.1;
+    egg.position.set(Math.cos(a) * 0.42, 0.44, Math.sin(a) * 0.42);
+    grp.add(egg);
+    eggMeshes.push(egg);
+  }
+  grp.position.set(x, g, z);
+  scene.add(grp);
+  gullNest = { x, z, g, eggs: NEST_EGGS, grp, eggMeshes };
+}
+
+/* M14: six extra crabs (9 -> 15) so the beach is properly busy */
+{
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xc05a33 });
+  const legMat = new THREE.MeshLambertMaterial({ color: 0x9a4326 });
+  for (let i = 0; i < 6; i++) {
+    let x = 0, z = 0, tries = 0;
+    do {
+      tries++;
+      const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 0.96;
+      x = Math.cos(a) * r, z = Math.sin(a) * r;
+    } while (tries < 4000 && (heightAt(x, z) < 0.35 || heightAt(x, z) > 1.5 ||
+      crabs.some((c) => Math.hypot(c.x - x, c.z - z) < 2.5)));
+    const m = buildCrabGroup(bodyMat, legMat);
+    m.grp.position.set(x, heightAt(x, z), z);
+    scene.add(m.grp);
+    crabs.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2,
+                turnT: rng() * 2, fleeT: 0, grp: m.grp, legs: m.legs, alive: true });
+  }
+}
+
+/* M14: pelicans ‒ the strong scavenger. Perches on a palm crown (or a
+   shallows anchor) by day, deep-dives fish schools, and hovers over a raw
+   fish in your hand for a 1.2 s telegraph ‒ Space keeps the fish. */
+const PELICAN_SPEED = 9;
+const PELICAN_WANDER = { f1: 0.08, f2: 0.1, rx: 14, rz: 12, homeR: 18, minStep: 1, pm: 1.8, speed: PELICAN_SPEED, still: 0 };
+const PELICAN_DIVE_R = 40, PELICAN_DIVE_CD = 25;
+const PELICAN_STEAL_R = 12, PELICAN_STEAL_T = 1.2, PELICAN_STEAL_CD = 30;
+
+function buildPelicanMesh(x, y, z) {
+  const grp = new THREE.Group();
+  const white = new THREE.MeshLambertMaterial({ color: 0xf5f2ea });
+  const grey = new THREE.MeshLambertMaterial({ color: 0xb9b4a8, side: THREE.DoubleSide });
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.22, 1.0, 6), white);
+  body.rotation.x = Math.PI / 2;   /* point forward (+z) */
+  grp.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.24), white);
+  head.position.set(0, 0.08, 0.62);
+  grp.add(head);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.4, 4),
+    new THREE.MeshLambertMaterial({ color: 0xd98e3f }));
+  beak.rotation.x = Math.PI / 2;
+  beak.position.set(0, 0.02, 0.9);
+  grp.add(beak);
+  const wingGeo = new THREE.PlaneGeometry(1.15, 0.4);
+  wingGeo.rotateX(-Math.PI / 2);
+  const wingL = new THREE.Mesh(wingGeo, grey);
+  wingL.position.set(-0.66, 0.06, 0);
+  const wingR = new THREE.Mesh(wingGeo, grey);
+  wingR.position.set(0.66, 0.06, 0);
+  grp.add(wingL, wingR);
+  grp.position.set(x, y, z);
+  scene.add(grp);
+  return { grp, wingL, wingR };
+}
+
+const pelicans = [];
+{
+  /* perch anchors: three tall palms well away from the spawn, or a shallows
+     anchor if a palm runs out. Perches are seed-deterministic (no rng). */
+  const perches = palms.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) > 25)
+    .sort((a, b) => b.h - a.h).slice(0, 3);
+  for (let i = 0; i < 3; i++) {
+    let px, pz, py;
+    if (perches[i]) {
+      px = perches[i].top[0]; pz = perches[i].top[2]; py = perches[i].top[1];
+    } else {
+      let tries = 0;
+      do {
+        tries++;
+        const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * ISLAND_R * 1.05;
+        px = Math.cos(a) * r, pz = Math.sin(a) * r;
+      } while (tries < 4000 && (heightAt(px, pz) > -0.2 || heightAt(px, pz) < -1.6));
+      py = WATER;
+    }
+    const m = buildPelicanMesh(px, py + 1, pz);
+    pelicans.push({ x: px, z: pz, hx: px, hz: pz, dir: rng() * Math.PI * 2, phase: rng() * 100,
+                    perch: [px, py, pz], stealT: 0, stealCd: 0, diveCd: 0,
+                    fleeT: 0, fleeX: 0, fleeZ: 0,
+                    grp: m.grp, wingL: m.wingL, wingR: m.wingR });
+  }
+}
+
+function updatePelicans(dt) {
+  if (!started || dead) return;
+  const px = rig.position.x, pz = rig.position.z;
+  for (const p of pelicans) {
+    if (p.stealCd > 0) p.stealCd -= dt;
+    if (p.diveCd > 0) p.diveCd -= dt;
+    if (p.fleeT > 0) p.fleeT -= dt;
+    const py = p.perch[1];
+    let dir = p.dir, speed = 0, alt = py;
+    if (dayFactor < 0.5) {
+      /* night: back to the perch, wings folded */
+      const hs = returnHome(p, PELICAN_SPEED * 0.8);   /* M12 */
+      if (hs > 0) { dir = p.dir; speed = hs; }
+    } else if (p.fleeT > 0) {
+      /* startled (panicWildlife / the Space counter): off, high */
+      dir = Math.atan2(p.x - p.fleeX, p.z - p.fleeZ);
+      speed = PELICAN_SPEED;
+      alt = py + 4;
+    } else if (p.stealT > 0) {
+      /* hand-steal telegraph: hover over the player's hand while they decide */
+      p.stealT -= dt;
+      alt = py + 3;
+      if (keys['Space']) {
+        p.stealT = 0;
+        p.stealCd = PELICAN_STEAL_CD;
+        p.fleeT = 2; p.fleeX = px; p.fleeZ = pz;
+        learn('pelicansteal', 'a pelican hovers over a fish in your hand \u2014 Space keeps it');
+        toast('\u{1F985} the pelican flaps off empty-handed');
+      } else if (p.stealT <= 0) {
+        p.stealCd = PELICAN_STEAL_CD;
+        INV.fishRaw--;
+        learn('pelican', 'pelicans steal a raw fish from your hand during the hover');
+        toast('\u{1F985} the pelican snatches the fish from your hand');
+      }
+    } else {
+      /* deep dive: take one fish from the nearest school (the fish finder) */
+      let target = null, bd = PELICAN_DIVE_R;
+      if (p.diveCd <= 0) {
+        for (const s of schools) {
+          if (s.n <= 0) continue;
+          const d = Math.hypot(s.x - p.x, s.z - p.z);
+          if (d < bd) { bd = d; target = s; }
+        }
+      }
+      if (target) {
+        const d = Math.hypot(target.x - p.x, target.z - p.z);
+        dir = Math.atan2(target.x - p.x, target.z - p.z);
+        speed = d > 1 ? PELICAN_SPEED : 0;
+        alt = d > 4 ? py + 3 : Math.max(WATER - 0.2, py + 3 - d);   /* swoop onto the water */
+        if (d <= 1.2) {
+          target.n--; target.mesh.count = target.n;
+          p.diveCd = PELICAN_DIVE_CD;
+          pelicanFishX = target.x; pelicanFishZ = target.z; pelicanFishT = 4;   /* the gulls mob it */
+          learn('pelicandive', 'the pelican deep-dives a fish school \u2014 watch where it dives to find the fish');
+          toast('\u{1F985} the pelican strikes the water');
+          p.x = target.x; p.z = target.z;
+        }
+      } else {
+        const mv = homeWander(p, PELICAN_WANDER);   /* M12 */
+        dir = mv.dir;
+        speed = mv.speed;
+        alt = py + 2;
+      }
+      /* hand steal: a raw fish in hand, the player close, the CD clear */
+      if (p.stealCd <= 0 && INV.fishRaw > 0 && Math.hypot(px - p.x, pz - p.z) < PELICAN_STEAL_R) {
+        p.stealT = PELICAN_STEAL_T;
+        toast('a pelican hovers over your hand \u2014 SPACE keeps the fish');
+      }
+    }
+    applyMove(p, dir, speed, dt, () => true);   /* air: no terrain veto; the dive dips on its own */
+    p.grp.position.set(p.x, alt, p.z);
+    p.grp.rotation.y = dir;
+    const flap = speed > 0 ? Math.sin(runT * 12 + p.phase) * 0.55 : 0.08;
+    p.wingL.rotation.z = flap;
+    p.wingR.rotation.z = -flap;
+  }
+}
+
+/* M14: the pelican, registry slot 7 (last) ‒ the M13 smoke asserts slots
+   4-6, so it must register after the snakes. */
+registerAnimal({
+  id: 'pelican', label: 'pelicans', pop: pelicans, phase: 'late',
+  band: 'air \u2014 palm-crown perches, shallows dives', count: 3, active: () => dayFactor >= 0.5,
+  speed: { fly: PELICAN_SPEED }, homeR: 18,
+  step: (dt) => updatePelicans(dt),
+  threat: 'deep-dives a fish school (a free fish finder the gulls contest), hovers to steal a raw fish from your hand \u2014 Space keeps it (M14); perches at night',
+});
+
 /* ---- the spear (attached to the right arm) ---- */
 const spearMesh = (() => {
   const g = new THREE.Group();
@@ -2051,6 +2298,16 @@ function actUse() {
     toast('\u{1F980} caught a crab');
     return;
   }
+  /* 5.5 M14: take a gull egg from the cliff nest (the flock remembers) */
+  if (gullNest && gullNest.eggs > 0 && Math.hypot(gullNest.x - x, gullNest.z - z) < 2.5) {
+    gullNest.eggs--;
+    gullNest.eggMeshes[gullNest.eggs].visible = false;
+    INV.gullEgg++;
+    gullAngerUntil = gameMin + 1800;   /* one visible day of dive-bombing */
+    learn('gullegg', 'a gull egg \u2014 the whole flock will hunt your head until tomorrow');
+    toast('\u{1F95A} +1 gull egg \u2014 the flock sees you now');
+    return;
+  }
   /* 6. harvest a ready plant (M7; lowest priority ‒ added after M1‒M6 branches) */
   let ph = null, phd = 1.5;
   for (const p of plants) {
@@ -2244,7 +2501,22 @@ function eatCrab() {
     toast('raw crab \u2014 a small meal');
     return;
   }
-  toast('no crab');
+  /* M14: V becomes "eat hand food" ‒ crab, then gull egg */
+  if (INV.gullEggCooked > 0) {
+    INV.gullEggCooked--;
+    stats.hunger = Math.min(100, stats.hunger + 20);
+    lastMeal = { hunger: 20, thirst: 0 };
+    toast('\u{1F95A} cooked gull egg');
+    return;
+  }
+  if (INV.gullEgg > 0) {
+    INV.gullEgg--;
+    stats.hunger = Math.min(100, stats.hunger + 10);
+    lastMeal = { hunger: 10, thirst: 0 };
+    toast('raw gull egg \u2014 chalky, but something');
+    return;
+  }
+  toast('no crab or egg to eat');
 }
 function vomit() {
   stats.hunger = Math.max(0, stats.hunger - lastMeal.hunger);
@@ -2308,6 +2580,7 @@ function respawn() {
   INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
   INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
   INV.herb = 0;
+  INV.gullEgg = INV.gullEggCooked = 0;   /* M14 */
   poisonDrain = null;
   infectedWound = false;
   if (camp) {
@@ -2681,7 +2954,7 @@ function updateSky(dt) {
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
             `\u261E ${bar(stats.wet)} ${String(stats.wet | 0).padStart(3, ' ')}\n` +
-            `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c\n` +
+            `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c   🥚 ${INV.gullEgg}r/${INV.gullEggCooked}c\n` +
             `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
             `seed ${SEED}`;
