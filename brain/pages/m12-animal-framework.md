@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [animals, framework, registry, determinism, architecture]
 created: "2026-10-17T20:43:56"
-updated: "2026-10-17T21:21:07"
+updated: "2026-10-17T22:00:48"
 ---
 
 <!-- compiled_truth -->
@@ -59,3 +59,9 @@ The four pre-M12 species are registered as reference entries with unchanged beha
   summary: "M13 (commit e85ab49) registered monkeys, lizards, snakes via this registry (4 -> 7 species, all 'late', after the gulls); framework contract unchanged, frame() untouched; see [[m13-land-wildlife]]"
   source: "commit e85ab49 (M13)"
   affects: [m13-land-wildlife]
+
+- time: 2026-10-17T22:00:48
+  kind: note
+  summary: "M14 (commit 6665b91) registered the pelican as registry slot 7 (7 -> 8 species, 'late', after the snakes) and grew crabs 9 -> 15; framework contract unchanged, frame() untouched; see [[m14-beach-air-wildlife]]"
+  source: "commit 6665b91 (M14)"
+  affects: [m14-beach-air-wildlife]

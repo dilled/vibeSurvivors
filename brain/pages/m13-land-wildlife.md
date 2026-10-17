@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [animals, m13, registry, monkeys, lizards, snakes, determinism]
 created: "2026-10-17T21:20:01"
-updated: "2026-10-17T21:20:25"
+updated: "2026-10-17T22:00:48"
 ---
 
 <!-- compiled_truth -->
@@ -52,3 +52,9 @@ M13 adds **monkeys, large lizards, and snakes** through the [[m12-animal-framewo
   summary: "M13 ‒ three land species joined the M12 registry: monkeys (steal/shriek-tell/coconut-bait), lizards (crab hunt + dusk camp raid held by fence+fire), snakes (reactive ambush, 0.8s tell, venom/harmless split); registry 4->7"
   source: "commit e85ab49 (M13)"
   affects: [m13-land-wildlife]
+
+- time: 2026-10-17T22:00:48
+  kind: note
+  summary: "M14 (commit 6665b91) grew the registry to 8 (pelican, slot 7, registered after the snakes) and panicWildlife now also makes the 3 pelicans flee for 3 s; the M13 slot-4-6 smoke assertions are untouched; see [[m14-beach-air-wildlife]]"
+  source: "commit 6665b91 (M14)"
+  affects: [m14-beach-air-wildlife]

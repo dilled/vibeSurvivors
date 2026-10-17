@@ -4,17 +4,17 @@ title: The 10-species animal ecosystem is the core design
 category: concept
 status: active
 created: "2026-09-14T18:41:08"
-updated: "2026-10-17T21:20:37"
+updated: "2026-10-17T22:00:47"
 ---
 
 <!-- compiled_truth -->
-The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders, large lizards, snakes, tigers, sharks. Each species has: territory, day/night schedule, threat tier, a teachable audio tell, and its role in the food chain. One cross-species **alarm bus** carries events (scream / alert / attack / flee): gulls scream ⇒ shark in the water, monkeys shriek ⇒ tiger near, crabs hide ⇒ big lizard near, fish schools are contested by pelicans and gulls. Design rule: the player has **no lethal weapons** — counters are fire, smoke, torch, fence, timing, and knowledge; tigers/sharks are avoided or driven off, never killed. Camp placement is strategy: once territories are mapped (on the hand-drawn paper map — there is **no minimap**), the island's danger becomes legible.
+The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders, large lizards, snakes, tigers, sharks. Each species has: territory, day/night schedule, threat tier, a teachable audio tell, and its role in the food chain. One cross-species **alarm bus** carries events (scream / alert / attack / flee): gulls scream ⇔ shark in the water, monkeys shriek ⇔ tiger near, crabs hide ⇔ big lizard near, fish schools are contested by pelicans and gulls. Design rule: the player has **no lethal weapons** ‒ counters are fire, smoke, torch, fence, timing, and knowledge; tigers/sharks are avoided or driven off, never killed. Camp placement is strategy: once territories are mapped (on the hand-drawn paper map ‒ there is **no minimap**), the island's danger becomes legible.
 
-This page is the design contract for the animal milestones M12–M17 (framework, species, alarm bus, ecosystem integration ‒ the old gate 'The island is alive'): every species listed in PLAN.md §5 must ship with territory, schedule, tells, and alarm-bus wiring.
+This page is the design contract for the animal milestones M12–M17 (framework, species, alarm bus, ecosystem integration ‒ the old gate 'The island is alive'): every species listed in PLAN.md ¤5 must ship with territory, schedule, tells, and alarm-bus wiring.
 
-**Framework contract (shipped in M12, [[m12-animal-framework]]):** every species is registered in the shared `animals[]` registry via `registerAnimal` as a descriptor (population array, home band, activity window, speeds, home-pull radius, terrain rule, threat/tell notes, frame phase) plus a per-species `step` hook, moving on the shared `homeWander`/`returnHome`/`faceHome`/`applyMove` helpers. Species run in two frame phases: `'early'` (fish, crabs) before weather/sky, `'late'` (tigers, gulls, and the M13 land species) after `updateSky`. Cross-species alarm-bus events build on the `panicWildlife` all-species hook pattern.
+**Framework contract (shipped in M12, [[m12-animal-framework]]):** every species is registered in the shared `animals[]` registry via `registerAnimal` as a descriptor (population array, home band, activity window, speeds, home-pull radius, terrain rule, threat/tell notes, frame phase) plus a per-species `step` hook, moving on the shared `homeWander`/`returnHome`/`faceHome`/`applyMove` helpers. Species run in two frame phases: `'early'` (fish, crabs) before weather/sky, `'late'` (tigers, gulls, and the M13/M14 species) after `updateSky`. Cross-species alarm-bus events build on the `panicWildlife` all-species hook pattern.
 
-**Species shipped so far:** M13 ([m13-land-wildlife]) added monkeys (jungle-edge meat stealer, tiger-proximity shriek tell ‒ the first shipped alarm-bus tell, coconut bait), large lizards (tide-line crab hunter, dusk camp raid held out by fence AND fire), and snakes (reactive-only ambush, 0.8 s telegraph, venomous/harmless split) through the registry with no bespoke world wiring (registry 4 -> 7). Remaining species milestones: pelicans, expanded crabs, sharks (M14–M15) and the alarm bus itself (M16).
+**Species shipped so far:** M13 ([[m13-land-wildlife]]) added monkeys (jungle-edge meat stealer, tiger-proximity shriek tell, coconut bait), large lizards (tide-line crab hunter, dusk camp raid held out by fence AND fire), and snakes (reactive-only ambush, 0.8 s telegraph, venomous/harmless split) (registry 4 -> 7). M14 ([[m14-beach-air-wildlife]]) added pelicans (palm-crown perches, deep-dive fish finder, 1.2 s hover steal countered by Space), the gull cliff nest with 3 stealable eggs (theft = one visible day of dive-bombing), the gull mob of a pelican's dive point, and crabs 9 -> 15 with the hide-from-lizard tell (registry 7 -> 8, pelican slot 7 after the snakes). Shipped alarm-bus tells so far: monkey tiger-proximity shriek (M13), gull mob of a pelican dive and crab hide from a big lizard (M14). Remaining species milestones: sharks (M15) and the alarm bus itself (M16); M17 is ecosystem integration/balancing.
 
 
 ## Timeline
@@ -59,4 +59,10 @@ This page is the design contract for the animal milestones M12–M17 (framework,
   kind: decision
   summary: "M13 shipped: monkeys, large lizards, snakes joined the registry (4->7); monkey tiger-proximity shriek tell is live; remaining: pelicans, expanded crabs, sharks, alarm bus"
   source: "commit e85ab49 (M13)"
+  affects: [animal-ecosystem-design]
+
+- time: 2026-10-17T22:00:47
+  kind: decision
+  summary: "M14 shipped: pelicans (slot 7), gull nest eggs + one-day theft anger, gull-mob of pelican dives, crabs 9 -> 15 with lizard-hide tell; registry 7 -> 8; only sharks and the alarm bus remain"
+  source: "commit 6665b91 (M14)"
   affects: [animal-ecosystem-design]
