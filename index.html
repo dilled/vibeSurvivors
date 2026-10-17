@@ -84,6 +84,7 @@
     <div class="row"><span>keep the fish from a hovering pelican</span><b>Space</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
     <div class="row"><span>sleep until dawn</span><b>Z</b></div>
+    <div class="row"><span>paper map</span><b>Y</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
   </div>
   <div class="play">ANY KEY &mdash; WASH ASHORE</div>
@@ -702,6 +703,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyL') actFence();
   if (e.code === 'KeyN') actTorch();
   if (e.code === 'KeyZ') actSleep();
+  if (e.code === 'KeyY') toggleMap();   /* M18: open/close the paper map */
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -2372,6 +2374,201 @@ registerAnimal({
   threat: 'low, non-lethal, no damage: night-only, creeps into an unlit camp near the player and snipes one leftover meat item after a 0.9 s clicking tell; a lit fire or torch keeps it off the perimeter (no fence needed); alarm-bus reaction only (M17)',
 });
 
+/* ---- paper map (M18) ---- */
+/* No minimap: the island is drawn on a paper sheet (Y) only as far as you
+   have walked it. A visited-cell grid reveals the terrain raster; landmarks
+   (wreck, camp, fires, gull nest, fishing spots), plant sites and animal
+   territories (per instance, within MAP_SEE_R) are recorded once, forever.
+   Pure player-side runtime state like journal/learned: no rng, no world
+   mutation, no saving (M25 owns saves). */
+const MAP_CELL = 2.5;                              /* world units per cell */
+const MAP_N = Math.ceil(SIZE / MAP_CELL);          /* 176 x 176 cells */
+const MAP_SEE_R = 40;                              /* discovery radius (units) */
+const MAP_VISIT_R = 6;                             /* cells marked walked */
+const MAP_PX = 660;                                /* parchment sheet pixels */
+const MAP_THROTTLE = 0.15;                         /* redraw period (s) */
+const MAP_INK = '#2e2417';
+const MAP_THREAT_INK = {                            /* territory circle ink */
+  fish: '#4a6a9a', crab: '#b08a2e', tiger: '#b03a2e', gull: '#b08a2e',
+  monkey: '#c06a2e', lizard: '#c06a2e', snake: '#c06a2e',
+  pelican: '#b08a2e', shark: '#b03a2e', spider: '#b08a2e',
+};
+
+const mapVisited = new Uint8Array(MAP_N * MAP_N);
+const mapKnown = new Set();   /* wreck, camp, fire:i, nest, spot:i, plant:i, terr:<id>:i */
+let mapOpen = false, mapDrawAcc = 0, mapRevealDirty = false;
+
+/* one-shot base raster (deterministic, no rng): the terrain zone palette at
+   MAP_CELL resolution, sampled once at load (about 30k heightAt calls) */
+const mapBaseData = (() => {
+  const P = { beach: [222, 199, 140], grass: [102, 153, 69], jungle: [66, 115, 56], high: [140, 133, 117] };
+  const sea = [23, 87, 105];
+  const d = new Uint8ClampedArray(MAP_N * MAP_N * 4);
+  for (let cz = 0; cz < MAP_N; cz++) {
+    for (let cx = 0; cx < MAP_N; cx++) {
+      const x = (cx + 0.5) * MAP_CELL - SIZE / 2;
+      const z = (cz + 0.5) * MAP_CELL - SIZE / 2;
+      const h = heightAt(x, z);
+      const col = h < 1.2 ? sea : P[zoneAt(h)];
+      const o = (cz * MAP_N + cx) * 4;
+      d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = 255;
+    }
+  }
+  return d;
+})();
+
+const mapEl = document.createElement('canvas');
+mapEl.width = MAP_PX; mapEl.height = MAP_PX;
+mapEl.style.cssText =
+  'position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) rotate(-0.7deg); ' +
+  'width:min(80vmin, 660px); height:min(80vmin, 660px); z-index:15; display:none; ' +
+  'box-shadow:0 12px 40px rgba(0,0,0,.55); border-radius:3px; background:#e8dcc0;';
+document.body.appendChild(mapEl);
+const mapCtx = mapEl.getContext('2d');
+const mapReveal = document.createElement('canvas');
+mapReveal.width = MAP_N; mapReveal.height = MAP_N;
+const mapRevealCtx = mapReveal.getContext('2d');
+const mapRevealImg = mapRevealCtx.createImageData(MAP_N, MAP_N);
+
+function toggleMap() {
+  if (dead) return;
+  mapOpen = !mapOpen;
+  mapEl.style.display = mapOpen ? 'block' : 'none';
+  if (mapOpen) mapDrawAcc = MAP_THROTTLE;   /* force a draw on the next tick */
+}
+
+function mapTick(dt) {
+  if (dead) { if (mapOpen) toggleMap(); return; }
+  if (!started) return;
+  const px = rig.position.x, pz = rig.position.z;
+  /* walked cells: a small radius around the player */
+  const rc = Math.ceil(MAP_VISIT_R / MAP_CELL);
+  const gx0 = Math.floor((px + SIZE / 2) / MAP_CELL), gz0 = Math.floor((pz + SIZE / 2) / MAP_CELL);
+  for (let dz = -rc; dz <= rc; dz++) {
+    for (let dx = -rc; dx <= rc; dx++) {
+      const gx = gx0 + dx, gz = gz0 + dz;
+      if (gx < 0 || gz < 0 || gx >= MAP_N || gz >= MAP_N) continue;
+      const i = gz * MAP_N + gx;
+      if (!mapVisited[i]) { mapVisited[i] = 1; mapRevealDirty = true; }
+    }
+  }
+  /* proximity discovery: known once, always known */
+  if (!mapKnown.has('wreck')) mapKnown.add('wreck');
+  if (camp && !mapKnown.has('camp') && Math.hypot(camp.x - px, camp.z - pz) < MAP_SEE_R) mapKnown.add('camp');
+  for (let i = 0; i < fires.length; i++) {
+    if (!mapKnown.has('fire:' + i) && Math.hypot(fires[i].x - px, fires[i].z - pz) < MAP_SEE_R) mapKnown.add('fire:' + i);
+  }
+  if (gullNest && !mapKnown.has('nest') && Math.hypot(gullNest.x - px, gullNest.z - pz) < MAP_SEE_R) mapKnown.add('nest');
+  for (let i = 0; i < schools.length; i++) {
+    if (!mapKnown.has('spot:' + i) && Math.hypot(schools[i].bx - px, schools[i].bz - pz) < MAP_SEE_R) mapKnown.add('spot:' + i);
+  }
+  for (let i = 0; i < plants.length; i++) {
+    if (!mapKnown.has('plant:' + i) && Math.hypot(plants[i].x - px, plants[i].z - pz) < MAP_SEE_R) mapKnown.add('plant:' + i);
+  }
+  for (const sp of animals) {
+    if (sp.id === 'fish') continue;   /* fish surface as fishing spots (bx,bz) above */
+    const pop = sp.pop;
+    for (let i = 0; i < pop.length; i++) {
+      const a = pop[i];
+      if (!mapKnown.has('terr:' + sp.id + ':' + i) && Math.hypot(a.hx - px, a.hz - pz) < MAP_SEE_R)
+        mapKnown.add('terr:' + sp.id + ':' + i);
+    }
+  }
+}
+
+function mapDraw(dt) {
+  if (!mapOpen) return;
+  mapDrawAcc += dt;
+  if (mapDrawAcc < MAP_THROTTLE) return;
+  mapDrawAcc = 0;
+  if (mapRevealDirty) {
+    const d = mapRevealImg.data, b = mapBaseData;
+    for (let i = 0; i < MAP_N * MAP_N; i++) {
+      if (!mapVisited[i]) continue;
+      const o = i * 4;
+      d[o] = b[o]; d[o + 1] = b[o + 1]; d[o + 2] = b[o + 2]; d[o + 3] = 255;
+    }
+    mapRevealDirty = false;
+  }
+  mapRevealCtx.putImageData(mapRevealImg, 0, 0);
+  const c = mapCtx;
+  const W = (v) => ((v + SIZE / 2) / SIZE) * MAP_PX;   /* world -> sheet (north = up) */
+  c.fillStyle = '#e8dcc0';
+  c.fillRect(0, 0, MAP_PX, MAP_PX);
+  c.imageSmoothingEnabled = true;
+  c.drawImage(mapReveal, 0, 0, MAP_PX, MAP_PX);
+  c.lineWidth = 2;
+  if (mapKnown.has('wreck')) {   /* the ashore point */
+    c.strokeStyle = MAP_INK;
+    c.beginPath();
+    c.moveTo(W(spawn.x) - 6, W(spawn.z) - 6); c.lineTo(W(spawn.x) + 6, W(spawn.z) + 6);
+    c.moveTo(W(spawn.x) + 6, W(spawn.z) - 6); c.lineTo(W(spawn.x) - 6, W(spawn.z) + 6);
+    c.stroke();
+  }
+  if (mapKnown.has('camp') && camp) {
+    c.strokeStyle = MAP_INK;
+    c.strokeRect(W(camp.x) - 5, W(camp.z) - 5, 10, 10);
+    c.beginPath();
+    c.moveTo(W(camp.x) + 2, W(camp.z) - 5); c.lineTo(W(camp.x) + 2, W(camp.z) - 13);
+    c.stroke();
+  }
+  fires.forEach((f, i) => {
+    if (!mapKnown.has('fire:' + i)) return;
+    c.fillStyle = '#a04a2e';
+    c.beginPath(); c.arc(W(f.x), W(f.z), 3.5, 0, Math.PI * 2); c.fill();
+  });
+  if (mapKnown.has('nest') && gullNest) {
+    c.strokeStyle = MAP_INK;
+    c.beginPath(); c.arc(W(gullNest.x), W(gullNest.z), 5, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = MAP_INK;
+    c.beginPath(); c.arc(W(gullNest.x), W(gullNest.z), 1.5, 0, Math.PI * 2); c.fill();
+  }
+  schools.forEach((s, i) => {
+    if (!mapKnown.has('spot:' + i)) return;
+    c.strokeStyle = '#4a6a9a';
+    c.beginPath(); c.arc(W(s.bx), W(s.bz), 6, 0, Math.PI * 2); c.stroke();
+  });
+  plants.forEach((p, i) => {
+    if (!mapKnown.has('plant:' + i)) return;
+    c.fillStyle = '#4a6a2e';
+    c.beginPath(); c.arc(W(p.x), W(p.z), 2.5, 0, Math.PI * 2); c.fill();
+  });
+  for (const sp of animals) {
+    if (sp.id === 'fish') continue;
+    const pop = sp.pop;
+    for (let i = 0; i < pop.length; i++) {
+      if (!mapKnown.has('terr:' + sp.id + ':' + i)) continue;
+      const a = pop[i];
+      c.strokeStyle = MAP_THREAT_INK[sp.id] || MAP_INK;
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.arc(W(a.hx), W(a.hz), (sp.homeR / SIZE) * MAP_PX, 0, Math.PI * 2);
+      c.stroke();
+    }
+  }
+  /* you: dot + heading */
+  const px = W(rig.position.x), pz = W(rig.position.z);
+  const fx = Math.sin(rig.rotation.y), fz = Math.cos(rig.rotation.y);
+  c.fillStyle = MAP_INK;
+  c.beginPath(); c.arc(px, pz, 4, 0, Math.PI * 2); c.fill();
+  c.strokeStyle = MAP_INK; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(px, pz); c.lineTo(px + fx * 14, pz + fz * 14); c.stroke();
+  /* compass + scale bar + hand-drawn border */
+  c.strokeStyle = MAP_INK;
+  c.beginPath();
+  c.moveTo(MAP_PX - 30, MAP_PX - 52); c.lineTo(MAP_PX - 30, MAP_PX - 22);
+  c.moveTo(MAP_PX - 35, MAP_PX - 38); c.lineTo(MAP_PX - 30, MAP_PX - 52); c.lineTo(MAP_PX - 25, MAP_PX - 38);
+  c.stroke();
+  c.fillStyle = MAP_INK;
+  c.fillText('N', MAP_PX - 34, MAP_PX - 58);
+  c.beginPath();
+  c.moveTo(20, MAP_PX - 24); c.lineTo(20 + (50 / SIZE) * MAP_PX, MAP_PX - 24);
+  c.stroke();
+  c.fillText('50', 20 + (50 / SIZE) * MAP_PX + 5, MAP_PX - 19);
+  c.lineWidth = 3;
+  c.strokeRect(4, 4, MAP_PX - 8, MAP_PX - 8);
+}
+
 /* ---- the spear (attached to the right arm) ---- */
 const spearMesh = (() => {
   const g = new THREE.Group();
@@ -3250,6 +3447,7 @@ let p0 = 0.1;      /* start ~08:00 */
     started = true;
     overlay.style.display = 'none';
   }
+  if (__q.has('map')) toggleMap();   /* M18: debug ‒ open the paper map at load */
 }
 function clockFromP(p) {
   if (p < DAY_FRAC) return 6 + 12 * (p / DAY_FRAC);
@@ -3397,6 +3595,7 @@ function frame(t) {
     checkDeath();
   }
   runT += dt;
+  mapTick(dt);   /* M18: walked cells + proximity discovery (player-side only) */
   spearSwing = Math.max(0, spearSwing - dt);
   updateItems(dt);
   updateFires(dt);
@@ -3411,6 +3610,7 @@ function frame(t) {
   updateAnimals(dt, 'late');    /* M12: tigers then gulls, after updateSky so dayFactor is fresh */
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
+  mapDraw(dt);   /* M18: throttled redraw while the paper map is open */
   updateCamera();
   renderer.render(scene, camera);
 }

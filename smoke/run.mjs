@@ -18,8 +18,10 @@ function makeEl() {
       measureText: () => ({ width: 10 }),
       createRadialGradient: () => ({ addColorStop: () => {} }),
       fillRect: () => {}, clearRect: () => {},
-      beginPath: () => {}, arc: () => {}, fill: () => {},
+      beginPath: () => {}, closePath: () => {}, arc: () => {}, fill: () => {},
       stroke: () => {}, fillText: () => {},
+      moveTo: () => {}, lineTo: () => {}, strokeRect: () => {}, rect: () => {},
+      drawImage: () => {}, save: () => {}, restore: () => {},   /* M18: paper map */
     }),
   };
 }
@@ -2027,6 +2029,56 @@ patched += `
     });
     if (!learnedSnap.spider) learned.delete('spider');
     if (!learnedSnap.spiderfire) learned.delete('spiderfire');
+  }
+
+  /* ---- M18: paper map ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const visitedCount = () => { let n = 0; for (let i = 0; i < mapVisited.length; i++) n += mapVisited[i]; return n; };
+
+    // 1. initial state: closed, the wreck known, spawn cells visited
+    if (mapOpen) throw new Error('M18: the map should start closed');
+    if (!mapKnown.has('wreck')) throw new Error('M18: the wreck should be known from the start');
+    if (visitedCount() === 0) throw new Error('M18: the visited grid should be seeded around spawn');
+
+    // 2. toggle + throttled draw on the stubbed 2D context
+    toggleMap();
+    if (!mapOpen) throw new Error('M18: toggleMap should open the map');
+    mapDraw(0.2);
+    mapDraw(0.2);
+    const visDrawn = visitedCount();
+    toggleMap();
+    if (mapOpen) throw new Error('M18: toggleMap should close the map');
+    if (visitedCount() !== visDrawn) throw new Error('M18: drawing should not change the visited grid');
+
+    // 3. proximity discovery in a controlled state: clear, park at a monkey home
+    mapKnown.clear(); mapKnown.add('wreck');
+    mapVisited.fill(0); mapRevealDirty = true;
+    const mk = monkeys[0];
+    park(mk.hx, mk.hz);
+    mapTick(0.1);
+    if (!mapKnown.has('terr:monkey:0'))
+      throw new Error('M18: the monkey territory should be discovered on proximity');
+    if (visitedCount() === 0) throw new Error('M18: the visited grid should mark walked cells');
+    const k1 = mapKnown.size, v1 = visitedCount();
+    mapTick(0.1); mapTick(0.1);
+    if (mapKnown.size !== k1 || visitedCount() !== v1)
+      throw new Error('M18: discovery should be idempotent at a fixed position');
+    const far = plants.find((q) =>
+      Math.hypot(q.x - mk.hx, q.z - mk.hz) > MAP_SEE_R * 1.5 &&
+      Math.hypot(q.x - spawn.x, q.z - spawn.z) > MAP_SEE_R * 1.5);
+    if (!far) throw new Error('M18: no plant far enough from the test positions');
+    if (mapKnown.has('plant:' + plants.indexOf(far)))
+      throw new Error('M18: a far plant must not leak onto the map');
+    toggleMap(); mapDraw(0.2); toggleMap();
+
+    // leave a clean state (M18)
+    mapKnown.clear(); mapKnown.add('wreck');
+    mapVisited.fill(0); mapRevealDirty = true;
+    park(spawn.x, spawn.z);
+    mapTick(0.1);
+    if (animals.length !== 10) throw new Error('M18: the registry must still hold 10 species: ' + animals.length);
+    if (mapOpen) throw new Error('M18: the map should be left closed');
   }
 }
 `;
