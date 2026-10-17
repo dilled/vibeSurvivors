@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [camp, building, shelter, bed, respawn]
 created: "2026-09-14T23:10:35"
-updated: "2026-09-14T23:12:10"
+updated: "2026-10-17T14:36:48"
 ---
 
 <!-- compiled_truth -->
@@ -23,7 +23,7 @@ updated: "2026-09-14T23:12:10"
 
 ## Rationale
 
-The camp is the anchor for M3 (fence + camp light/fire), M4 (safe sleep needs a valid camp) and M10 (tigers threaten the camp at night). A single, validated, grounded camp with deterministic structure offsets is the minimal contract those milestones can build on.
+The camp is the anchor for M3 (fence + camp light/fire), M4 (safe sleep needs a valid camp) and M5/M6 (tigers threaten the camp at night). A single, validated, grounded camp with deterministic structure offsets is the minimal contract those milestones can build on.
 
 ## Blast radius
 
@@ -49,4 +49,16 @@ Camp rejected in water; valid-site search; placement at player position, grounde
   kind: decision
   summary: "M2 shipped: camp spot selection (H, campCheck validity), fixed-offset shelter/bed structures (J/K), camp-aware respawn; smoke + headless render verified"
   source: M2 implementation session 2026-09-14
+  affects: [m2-camp-system]
+
+- time: 2026-10-17T14:35:38
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: brain update-truth
+  affects: [m2-camp-system]
+
+- time: 2026-10-17T14:36:48
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: brain update-truth
   affects: [m2-camp-system]

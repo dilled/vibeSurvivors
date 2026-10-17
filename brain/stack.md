@@ -2,7 +2,7 @@
 slug: stack
 title: Tech stack
 role: tech-stack choices
-updated: "2026-09-14T18:41:07"
+updated: "2026-10-17T14:39:33"
 ---
 
 # Tech stack
@@ -18,4 +18,4 @@ updated: "2026-09-14T18:41:07"
 | Animal AI | Per-species finite state machine + small **alarm bus** (scream/alert/attack/flee events) | Simple, debuggable; 10 species |
 | Audio | WebAudio, generated/short clips, no asset pipeline | No build step constraint; audio carries the night fear |
 | Save | localStorage, JSON snapshot at camp + night transition (single-player) | House pattern (vibeCraft local saves) |
-| Multiplayer (later, M7) | `VibeSurvivorsPlugin` in `../ServerBase` (C++20, uWebSockets, zlib/lz4) | House pattern: first client is world-authority, ~30 Hz tick relay, full edit-history resend on join, `?mp=host:port` |
+| Multiplayer (later, M27–M31) | `VibeSurvivorsPlugin` in `../ServerBase` (C++20, uWebSockets, zlib/lz4) | v1-mp: first client is world-authority (v2 relay), ~30 Hz tick, full edit-history resend on join, `?mp=host:port`; server-authoritative vibeGTA v3 model deferred to mp v2+ |
