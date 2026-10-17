@@ -82,6 +82,7 @@
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
+    <div class="row"><span>sleep until dawn</span><b>Z</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
   </div>
   <div class="play">ANY KEY &mdash; WASH ASHORE</div>
@@ -457,6 +458,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyK') actBed();
   if (e.code === 'KeyL') actFence();
   if (e.code === 'KeyN') actTorch();
+  if (e.code === 'KeyZ') actSleep();
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -1021,6 +1023,31 @@ function actTorch() {
   learn('torch', 'camp torch: a standing light for the camp \u2014 N \u2014 it burns all night');
   toast('\uD83D\uDD25 camp torch built \u2014 the camp is lit');
 }
+/* sleep (M4): a lit bed at camp carries the night; the clock jumps to dawn */
+function sleepCheck() {
+  if (!camp) return { ok: false, reason: 'establish a camp first \u2014 H' };
+  if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10)
+    return { ok: false, reason: 'sleep at your camp \u2014 it is over there' };
+  if (!camp.structures.bed) return { ok: false, reason: 'make a bed first \u2014 K' };
+  if (!campIsLit()) return { ok: false, reason: 'the camp needs light \u2014 torch (N) or a fire' };
+  return { ok: true };
+}
+function actSleep() {
+  if (dead) return;
+  const chk = sleepCheck();
+  if (!chk.ok) { toast('\u274C can\u2019t sleep \u2014 ' + chk.reason); return; }
+  const pNow = (p0 + gameMin / 1800) % 1;
+  const dp = (0.05 - pNow + 1) % 1;          /* jump to dawn (~06:30) */
+  gameMin += dp * 1800;
+  const realSec = (dp * 1800) / 1.2;          /* night-rate real seconds the night would have taken */
+  stats.thirst = Math.max(0, stats.thirst - THIRST_RATE * realSec * 0.5);   /* resting: half rate */
+  stats.hunger = Math.max(0, stats.hunger - HUNGER_RATE * realSec * 0.5);
+  stats.health = Math.min(100, stats.health + 30);   /* rest restores, not full */
+  const o = campOffsets('bed');
+  rig.position.set(o.x, Math.max(heightAt(o.x, o.z), WATER - 0.25), o.z);
+  learn('sleep', 'sleep: a bed and light at camp \u2014 the night passes at your bed \u2014 Z');
+  toast('\u23E8 the night passes \u2014 you wake on the bed at dawn');
+}
 function actCraftSpear() {
   if (dead || spear) return;
   spear = true;
@@ -1115,6 +1142,8 @@ function contextHint() {
     if (!camp.structures.fence) missing.push('L \u2014 build the fence');
     if (!camp.structures.torch) missing.push('N \u2014 build the camp torch');
     if (missing.length) return missing.join('  \u00B7  ');
+    if (camp.structures.bed && campIsLit() && dayFactor < 0.25)
+      return 'Z \u2014 sleep until dawn';
   }
   if (spear && h < 0.6 && schools.some((s) => s.n > 0 && Math.hypot(s.x - x, s.z - z) < 5))
     return 'X \u2014 spear the school';

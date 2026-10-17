@@ -286,6 +286,56 @@ patched += `
   if (fires.length !== nFires0 + 1) throw new Error('fire at camp was not lit');
   if (!campIsLit()) throw new Error('camp should be lit by a fire burning in it');
   if (torchLights.length !== 1) throw new Error('torch should register exactly one standing light');
+
+  /* ---- M4: sleep + night survival loop ---- */
+
+  // clock to midnight; far from camp, sleep is rejected and the clock is untouched
+  setClockP(0.85); pump(1);
+  const farx = camp.x - 15;
+  rig.position.set(farx, Math.max(heightAt(farx, camp.z), WATER - 0.25), camp.z);
+  if (sleepCheck().ok) throw new Error('sleep should be rejected far from camp');
+  const gmFar = gameMin;
+  actSleep();
+  if (gameMin !== gmFar) throw new Error('rejected sleep must not advance the clock');
+
+  // at the camp but in the dark: rejected (null the torch, move the camp fire away)
+  rig.position.set(camp.x, camp.g, camp.z);
+  const tT = camp.structures.torch; camp.structures.torch = null;
+  const farF = fires[fires.length - 1]; farF.x += 50;
+  if (campIsLit()) throw new Error('camp should be dark with torch nulled and fire moved');
+  if (sleepCheck().ok) throw new Error('sleep should be rejected in the dark');
+  camp.structures.torch = tT; farF.x -= 50;
+  if (!campIsLit()) throw new Error('camp should be lit again after restore');
+
+  // no bed: rejected
+  const tB = camp.structures.bed; camp.structures.bed = null;
+  if (sleepCheck().ok) throw new Error('sleep should require a bed');
+  camp.structures.bed = tB;
+
+  // valid camp at night: allowed, and the context hint offers sleep
+  if (!sleepCheck().ok) throw new Error('valid camp should allow sleep');
+  pump(1);
+  const hint = contextHint();
+  if (!hint.startsWith('Z')) throw new Error('night hint should offer sleep: ' + hint);
+
+  // sleep: jump to dawn, resting costs, rest recovery, wake on the bed
+  const thS = stats.thirst, huS = stats.hunger, hpS = stats.health, gmS = gameMin;
+  const pBefore = (p0 + gameMin / 1800) % 1;
+  const dpExp = (0.05 - pBefore + 1) % 1;
+  actSleep();
+  const pAfter = (p0 + gameMin / 1800) % 1;
+  if (Math.abs(pAfter - 0.05) > 0.001) throw new Error('sleep should land at dawn: ' + pAfter);
+  if (Math.abs((gameMin - gmS) - dpExp * 1800) > 1) throw new Error('sleep did not advance the clock correctly');
+  const realSec = (dpExp * 1800) / 1.2;
+  const thExp = Math.max(0, thS - THIRST_RATE * realSec * 0.5);
+  const huExp = Math.max(0, huS - HUNGER_RATE * realSec * 0.5);
+  if (Math.abs(stats.thirst - thExp) > 1e-6) throw new Error('sleep thirst cost wrong: ' + stats.thirst + ' vs ' + thExp);
+  if (Math.abs(stats.hunger - huExp) > 1e-6) throw new Error('sleep hunger cost wrong: ' + stats.hunger + ' vs ' + huExp);
+  if (stats.health !== Math.min(100, hpS + 30)) throw new Error('sleep rest recovery wrong');
+  const bo = campOffsets('bed');
+  if (Math.abs(rig.position.x - bo.x) + Math.abs(rig.position.z - bo.z) > 0.01) throw new Error('did not wake on the bed');
+  pump(2);
+  if (sun.intensity <= 0) throw new Error('dawn after sleep should have sun');
 }
 `;
 const file = join(here, '.game-smoke.mjs');
