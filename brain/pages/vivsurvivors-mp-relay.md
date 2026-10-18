@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, protocol, serverbase]
 created: "2026-10-18T05:02:17"
-updated: "2026-10-18T05:02:54"
+updated: "2026-10-18T06:08:35"
 ---
 
 <!-- compiled_truth -->
@@ -18,7 +18,7 @@ M27 ships the `VibeSurvivorsPlugin` in `../ServerBase` (branch `feat/vibecraft-s
 - Transport: WSS, port **3003**, self-signed CN=localhost cert (no SAN ‒ headless Node works with `NODE_TLS_REJECT_UNAUTHORIZED=0`; browser nag is a human-gate detail).
 - Join: ServerCore house pattern ‒ send `[3] + utf8 "<uuid>|1|1337"`; success = type **8** with u32 publicId **big-endian**; error = type **255** utf8.
 - `MSG_VIVS_STATE` (26, c2s): `[26] + VivsPlayerState` (21 B LE: u32 publicId, f32 x,y,z,yaw, u8 state bit0=underwater). Server overwrites the client's publicId; `stateIsPlausible` sanity check (|x|,|z|<=320, y in [-5,40], speed <=12 u/s).
-- `MSG_VIVS_TICK` (27, s2c): `[27][u8 flags][u32 authorityPublicId LE]` then **flag-driven sequential sections in fixed order**: bit0 players (`u32 tickId, u32 count, count*21B`), bit1 edits (M29), bit2 animals (M30), bit3 names (`u32 count, then (u32 id, u32 len, utf8)`), bit4 time (M28+). A client MUST consume every set section in order, reading the count prefix even when skipping reserved ones, or the offset walk desyncs.
+- `MSG_VIVS_TICK` (27, s2c): `[27][u8 flags][u32 authorityPublicId LE]` then **flag-driven sequential sections in fixed order**: bit0 players (`u32 tickId, u32 count, count*21B`), bit1 edits (M29), bit2 animals (M30), bit3 names (`u32 count, then (u32 id, u32 len, utf8)`), bit4 time (reserved; NO v1 wire payload ‒ time authority is explicitly M29, see [[m28-mp-presence]]). A client MUST consume every set section in order, reading the count prefix even when skipping reserved ones, or the offset walk desyncs.
 - `MSG_VIVS_NAME` (31, c2s): `[31] + utf8 name`. IDs 28/29/30 are reserved (M29/M30) and ignored by the server; 30 = `MSG_VIVS_EDIT_SYNC` join catch-up.
 - Everything little-endian **except** the `MSG_JOIN_SUCCESS` publicId (big-endian).
 
@@ -28,11 +28,11 @@ M27 ships the `VibeSurvivorsPlugin` in `../ServerBase` (branch `feat/vibecraft-s
 
 ## Client (this repo)
 
-`lib/mp.js` exports `attachMultiplayer({rig, url, seed, displayName, inWater, onTick})`: ws connect/join, name send, 30 Hz state upload, tick parsing (players+names; reserved sections skipped per the rule above), `remotes` Map, reconnect backoff (1s x1.6, cap 10s), HUD status line. `index.html` has ONE guarded block: `?mp=host:port` (or full wss://) triggers the name prompt (localStorage `vsvName`, empty = random) + `import('./lib/mp.js')`. Without `?mp=` the module never imports it ‒ single-player stays bit-identical (smoke stub `location.search=''` never touches it; smoke M27 block proves the client code path + asserts WebSocket stays unused in single-player).
+`lib/mp.js` exports `attachMultiplayer({rig, url, seed, displayName, inWater, onTick})`: ws connect/join, name send, 30 Hz state upload, tick parsing (players+names; reserved sections skipped per the rule above), `remotes` Map, reconnect backoff (1s x1.6, cap 10s), HUD status line. Since M28 the API also exposes `connected()` (joined && ws OPEN) as the presence visibility gate. `index.html` has ONE guarded block: `?mp=host:port` (or full wss://) triggers the name prompt (localStorage `vsvName`, empty = random) + `import('./lib/mp.js')`, and now captures the returned API into module-scope `mpApi` for the M28 presence layer. Without `?mp=` the module never imports it ‒ single-player stays bit-identical (smoke stub `location.search=''` never touches it; smoke M27 block proves the client code path + asserts WebSocket stays unused in single-player).
 
 ## Reserved for later
 
-M28: presence rendering (remote avatars + name tags from `remotes`) + time authority (tick bit4). M29: world edits relay (bit1 + `MSG_VIVS_EDIT_SYNC` 30 on join). M30: animals (bit2, world-authority upload). M27 deliberately implements none of them.
+M28 is shipped: presence rendering (remote avatars + name tags from `remotes`) is done; **time authority (tick bit4) stayed out of M28 and is explicitly M29** (needs a ServerBase plugin + shared struct change). M29: world edits relay (bit1 + `MSG_VIVS_EDIT_SYNC` 30 on join) + time authority (bit4). M30: animals (bit2, world-authority upload). M31: reconnect/integration. Full rendering + verification details: [[m28-mp-presence]].
 
 
 ## Timeline
@@ -47,4 +47,10 @@ M28: presence rendering (remote avatars + name tags from `remotes`) + time autho
   kind: decision
   summary: "M27 shipped: plugin builds + ?mp= client connects end-to-end against the real server; record the relay model, protocol v1 wire facts, the ServerBase router bug found, and what is reserved for M28-M30"
   source: brain update-truth
+  affects: [vivsurvivors-mp-relay]
+
+- time: 2026-10-18T06:08:35
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "brain sync pass: commit f0f717f (M28)"
   affects: [vivsurvivors-mp-relay]
