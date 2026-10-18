@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-17T23:49:02.218Z._
+_Auto-generated. Last updated 2026-10-18T00:04:38.856Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -13,6 +13,7 @@ _Auto-generated. Last updated 2026-10-17T23:49:02.218Z._
 - [m16-animal-alarm-bus](pages/m16-animal-alarm-bus.md) — category: decision | tags: [animals, m16, alarm-bus, cross-species, determinism] | ## What shipped (M16 ‒ animal alarm bus + cross-species reactions)
 - [m17-spider-ecosystem-integration](pages/m17-spider-ecosystem-integration.md) — category: project | tags: [m17, animals, balancing] | M17 = the last animal milestone. Scope: ship the PLAN.md ¤5 **spider** as the 10th registered species through the M12 framework, plus the ec
 - [m18-paper-map-system](pages/m18-paper-map-system.md) — category: decision | tags: [m18, map, ui] | M18 = the paper map system. Scope: the player can navigate using an in-world paper map (PLAN.md M18 row).
+- [m19-journal-discoveries](pages/m19-journal-discoveries.md) — category: decision | tags: [m19, journal, ui, discovery] | M19 = journal + discoveries. Scope: plants, animals and discoveries are recorded through gameplay (PLAN.md M19 row).
 - [m2-camp-system](pages/m2-camp-system.md) — category: decision | tags: [camp, building, shelter, bed, respawn] | ## What shipped (M2 — camp build spot + simple structure placement)
 - [m3-camp-fence-light](pages/m3-camp-fence-light.md) — category: decision | tags: [camp, fence, torch, light] | ## What shipped (M3 — fence + camp light/fire integration)
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
