@@ -5,11 +5,11 @@ category: decision
 status: active
 tags: [m21, raft, win, ending]
 created: "2026-10-18T00:41:49"
-updated: "2026-10-18T00:42:04"
+updated: "2026-10-18T01:09:08"
 ---
 
 <!-- compiled_truth -->
-M21 = escape/win sequence: the M20 raft becomes a working game ending (PLAN.md M21: "Completed raft provides a working game ending"). Shipped `d312b0c`. The story win is raft -> sail off; endless mode stays M22 and save/persistence M25.
+M21 = escape/win sequence: the M20 raft becomes a working game ending (PLAN.md M21: "Completed raft provides a working game ending"). Shipped `d312b0c`; M22 (`d421394`) later extended the win overlay with an E-stay path into [[m22-endless-mode]]. The story win is raft -> sail off; save/persistence stays M25.
 
 **Boarding is a player-side toggle, not a new world object:** `E` within 2.5 u of the built M20 raft boards/unboards the player (`onRaft`), `learn('sail')` + toasts. `E` with no raft is a no-op.
 
@@ -18,8 +18,8 @@ M21 = escape/win sequence: the M20 raft becomes a working game ending (PLAN.md M
 **The win is a radius, not a scripted event:** rowing past `WIN_R = ISLAND_R + 60` (270 u, deliberately beyond max shark reach ~260 u) calls `winEscape()`. `won = true`, `onRaft = false`, and `started = false` freeze the whole simulation through the existing `started` gates while the renderer keeps drawing.
 
 **State hygiene (the durable part):**
-- The `#won` overlay (z-index 25, mirrors `#dead`) shows days ashore `dayOf()`, discoveries `journal.length`, animals seen (`JOURNAL_ANIMALS`) + "R - wash ashore again".
-- A `won`-guard in keydown lets only `R -> location.reload` act; a `!won`-guard on the started-resume path means no stray key can un-freeze the sim.
+- The `#won` overlay (z-index 25, mirrors `#dead`) shows days ashore `dayOf()`, discoveries `journal.length`, animals seen (`JOURNAL_ANIMALS`) + "R - wash ashore again", and (since M22) the "E - stay on the island (endless)" row.
+- A `won`-guard in keydown lets only `R -> location.reload` and (since M22) `E -> startEndless()` act; a `!won`-guard on the started-resume path means no stray key can un-freeze the sim.
 - Respawn and the KeyR-shore path clear `onRaft`; `updateSharks` in-water check excludes `onRaft` (the raft is uncounterable).
 - `contextHint` gains a `won` early-return, an E-board hint <= 3 u, and a WASD-row hint with u-to-go; title-card row + `#won` CSS added.
 
@@ -37,6 +37,12 @@ M21 = escape/win sequence: the M20 raft becomes a working game ending (PLAN.md M
   affects: [m21-escape-win]
 
 - time: 2026-10-18T00:42:04
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: brain update-truth
+  affects: [m21-escape-win]
+
+- time: 2026-10-18T01:09:08
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: brain update-truth
