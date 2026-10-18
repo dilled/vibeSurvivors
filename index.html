@@ -85,6 +85,7 @@
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
     <div class="row"><span>sleep until dawn</span><b>Z</b></div>
     <div class="row"><span>paper map</span><b>Y</b></div>
+    <div class="row"><span>field journal</span><b>I</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
   </div>
   <div class="play">ANY KEY &mdash; WASH ASHORE</div>
@@ -704,6 +705,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyN') actTorch();
   if (e.code === 'KeyZ') actSleep();
   if (e.code === 'KeyY') toggleMap();   /* M18: open/close the paper map */
+  if (e.code === 'KeyI') toggleJournal();   /* M19: open/close the field journal */
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -751,8 +753,29 @@ const COOKABLE = ['fishRaw', 'crab', 'sweetpotato', 'yam', 'gullEgg'];   /* M14:
 const COOK_RESULT = { fishRaw: 'fishCooked', crab: 'crabCooked', sweetpotato: 'sweetpotatoCooked', yam: 'yamCooked', gullEgg: 'gullEggCooked' };
 const COOK_NAME = { fishRaw: 'fish', crab: 'crab', sweetpotato: 'sweet potato', yam: 'yam', gullEgg: 'gull egg' };
 
-const journal = [];   /* M6: persisted at camp save */
+const journal = [];   /* M6: persisted at camp save; M19: {cat, msg, day} entries */
 const learned = new Set();
+
+/* M19: field journal categories. Plant species (harvest) + cook/poison
+   knowledge + the herb; the 10 species ids and their behaviour tells +
+   first sightings (see-*); the weather tells; everything else is survival. */
+const JOURNAL_PLANTS = new Set(
+  Object.keys(PLANT_TYPES).concat(['herb-cure']));
+const JOURNAL_WEATHER = new Set(['weather', 'storm', 'lightning', 'wind', 'wet', 'lagoon', 'rain']);
+const JOURNAL_ANIMALS = new Set(['fish', 'crab', 'tiger', 'gull', 'monkey', 'lizard', 'snake', 'pelican', 'shark', 'spider',
+  'fishscatter', 'crabhide', 'crabalarm', 'gullmob', 'gullanger', 'gullscare', 'gullegg',
+  'monkeyscream', 'monkeybait', 'lizardfence', 'lizardcrab', 'snakevenom', 'snakeharmless',
+  'spiderfire', 'pelicansteal', 'pelicandive', 'bite', 'blood']);
+function catOf(key) {
+  if (JOURNAL_PLANTS.has(key) || key.startsWith('eat-')) return 'plants';
+  if (JOURNAL_ANIMALS.has(key) || key.startsWith('see-')) return 'animals';
+  if (JOURNAL_WEATHER.has(key)) return 'weather';
+  return 'survival';
+}
+/* game day, from the same clock the HUD uses: survives ?t= starts, T skips,
+   and sleep jumps because it is derived, never counted */
+function dayOf() { return Math.floor((p0 * 1800 + gameMin) / 1800) + 1; }
+function logLine(msg, cat) { journal.push({ msg, cat: cat || 'survival', day: dayOf() }); }
 const toastEls = [0, 1, 2].map((i) => document.getElementById('toast' + i));
 let toastIdx = -1;
 function toast(msg) {
@@ -764,7 +787,7 @@ function toast(msg) {
   el.__t = setTimeout(() => { el.style.opacity = '0'; }, 4200);
 }
 function learn(key, msg) {
-  if (!learned.has(key)) { learned.add(key); journal.push(msg); toast('\u{1F4D3} ' + msg); }
+  if (!learned.has(key)) { learned.add(key); journal.push({ cat: catOf(key), msg, day: dayOf() }); toast('\u{1F4D3} ' + msg); }
 }
 
 /* ---- items on the ground (falling / dropped coconuts) ---- */
@@ -2569,6 +2592,100 @@ function mapDraw(dt) {
   c.strokeRect(4, 4, MAP_PX - 8, MAP_PX - 8);
 }
 
+/* ---- field journal (M19) ---- */
+/* The journal (I) is a viewable field journal: every discovery recorded
+   through gameplay - plant species on harvest, cook/poison knowledge, all 10
+   animal species (first sighting within SIGHT_R plus the behaviour tells the
+   species already teach), weather and survival tells - as {cat, msg, day}
+   entries grouped by category. Sighting is pure player-side runtime state
+   like the paper map and journal/learned: no rng, no world mutation, no
+   saving (M25 owns saves). */
+const SIGHT_R = 30;   /* first-sighting radius (units) */
+const ZONE_WORD = { beach: 'the beach', grass: 'the grassland', jungle: 'the jungle', high: 'the high ground' };
+const SEE_MSG = {
+  fish: 'a school of fish circles under the surface',
+  crab: 'crabs scuttle between the beach rocks',
+  tiger: 'a tiger stalks the jungle edge',
+  gull: 'gulls wheel over the cliffs',
+  monkey: 'monkeys swing through the jungle canopy',
+  lizard: 'a large lizard basks in the grass',
+  snake: 'a snake coils in the shade',
+  pelican: 'a pelican perches above the water',
+  shark: 'a dark shadow glides past the shore',
+  spider: 'a spider drops from a strand of silk',
+};
+
+/* the still-to-learn catalog: what gameplay can still record per category */
+const PLANT_CATALOG = Object.keys(PLANT_TYPES).filter((k) => PLANT_TYPES[k].learn)
+  .concat(['eat-sweetpotato', 'eat-yam', 'eat-poisonberry', 'eat-poisonfern', 'eat-poisonyam', 'herb-cure']);
+const ANIMAL_CATALOG = ['fish', 'crab', 'tiger', 'gull', 'monkey', 'lizard', 'snake', 'pelican', 'shark', 'spider']
+  .map((id) => 'see-' + id);
+const WEATHER_CATALOG = ['weather', 'storm', 'lightning', 'wind', 'wet', 'lagoon'];
+const JOURNAL_CATS = [['plants', 'Plants'], ['animals', 'Animals'], ['weather', 'Weather'], ['survival', 'Survival']];
+function undiscoveredCount(cat) {
+  const keys = cat === 'plants' ? PLANT_CATALOG : cat === 'animals' ? ANIMAL_CATALOG : cat === 'weather' ? WEATHER_CATALOG : null;
+  if (!keys) return 0;
+  let n = 0;
+  for (const k of keys) if (!learned.has(k)) n++;
+  return n;
+}
+
+const journalEl = document.createElement('div');
+journalEl.style.cssText =
+  'position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) rotate(-0.7deg); ' +
+  'width:min(70vmin, 560px); max-height:80vmin; overflow-y:auto; z-index:15; display:none; ' +
+  'box-shadow:0 12px 40px rgba(0,0,0,.55); border-radius:3px; background:#e8dcc0; ' +
+  'color:#2e2417; font-family:Georgia, "Times New Roman", serif; padding:24px 28px; font-size:15px; line-height:1.45;';
+document.body.appendChild(journalEl);
+let journalOpen = false;
+
+function renderJournal() {
+  let html = '<h3 style="font-family:Georgia,serif; font-size:22px; margin:0 0 10px;">field journal</h3>';
+  for (const [cat, title] of JOURNAL_CATS) {
+    const rows = journal.filter((e) => e.cat === cat);
+    const n = undiscoveredCount(cat);
+    html += '<h4 style="font-family:Georgia,serif; margin:12px 0 4px; border-bottom:1px solid #2e2417; padding-bottom:2px;">' + title + '</h4>';
+    if (rows.length === 0) { if (n > 0) html += '<p style="margin:2px 0; opacity:.7;">' + n + ' more to learn</p>'; continue; }
+    for (const e of rows) html += '<p style="margin:2px 0;">day ' + e.day + ' \u2014 ' + e.msg + '</p>';
+    if (n > 0) html += '<p style="margin:2px 0; opacity:.7;">' + n + ' more to learn</p>';
+  }
+  journalEl.innerHTML = html;
+}
+
+function toggleJournal() {
+  if (dead) return;
+  journalOpen = !journalOpen;
+  journalEl.style.display = journalOpen ? 'block' : 'none';
+  if (journalOpen) renderJournal();   /* entries added while closed appear on open */
+}
+
+function journalTick(dt) {
+  if (dead) { if (journalOpen) toggleJournal(); return; }
+  if (!started) return;
+  const px = rig.position.x, pz = rig.position.z;
+  /* first sighting: any live instance within SIGHT_R records the species
+     once; fish surface at their school anchor (bx,bz) like the paper map */
+  for (const sp of animals) {
+    const key = 'see-' + sp.id;
+    if (learned.has(key)) continue;
+    let ax = 0, az = 0, hit = false;
+    if (sp.id === 'fish') {
+      for (let i = 0; i < schools.length; i++) {
+        const s = schools[i];
+        if (Math.hypot(s.bx - px, s.bz - pz) < SIGHT_R) { ax = s.bx; az = s.bz; hit = true; break; }
+      }
+    } else {
+      const pop = sp.pop;
+      for (let i = 0; i < pop.length; i++) {
+        const a = pop[i];
+        if (Math.hypot(a.x - px, a.z - pz) < SIGHT_R) { ax = a.x; az = a.z; hit = true; break; }
+      }
+    }
+    if (hit)
+      learn(key, SEE_MSG[sp.id] + ' \u2014 ' + (sp.id === 'fish' ? 'the water' : ZONE_WORD[zoneAt(heightAt(ax, az))] || 'the island'));
+  }
+}
+
 /* ---- the spear (attached to the right arm) ---- */
 const spearMesh = (() => {
   const g = new THREE.Group();
@@ -2916,7 +3033,7 @@ function actFire() {
   const { x, z, h } = playerPos();
   if (h < 0.35) { toast('the water would put it out'); return; }
   makeFire(x, h, z);
-  journal.push('you light a fire');
+  logLine('you light a fire', 'survival');
   toast('\u{1F525} a fire \u2014 light, and something to cook over');
 }
 function actCamp() {
@@ -3012,7 +3129,7 @@ function actCraftSpear() {
   if (dead || spear) return;
   spear = true;
   spearMesh.visible = true;
-  journal.push('you make a spear \u2014 a driftwood stick, a palm-fibre knot, a stone point');
+  logLine('you make a spear \u2014 a driftwood stick, a palm-fibre knot, a stone point', 'survival');
   toast('\u2694\uFE0F spear in hand');
 }
 function eatCoconut() {
@@ -3596,6 +3713,7 @@ function frame(t) {
   }
   runT += dt;
   mapTick(dt);   /* M18: walked cells + proximity discovery (player-side only) */
+  journalTick(dt);   /* M19: first-sighting discoveries (player-side only) */
   spearSwing = Math.max(0, spearSwing - dt);
   updateItems(dt);
   updateFires(dt);

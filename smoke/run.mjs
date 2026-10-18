@@ -2080,6 +2080,90 @@ patched += `
     if (animals.length !== 10) throw new Error('M18: the registry must still hold 10 species: ' + animals.length);
     if (mapOpen) throw new Error('M18: the map should be left closed');
   }
+
+  /* ---- M19: field journal + first-sighting discoveries ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const learnedSnap = new Set(learned);
+    const journalSnap = journal.slice();
+    const seeSnap = [...learned].filter((k) => k.startsWith('see-'));
+
+    // 1. structured {cat, msg, day} entry + dedupe
+    journal.length = 0;
+    learn('smoketest-x', 'smoke entry one');
+    learn('smoketest-x', 'smoke entry one');
+    if (journal.length !== 1) throw new Error('M19: learn should dedupe: ' + journal.length);
+    const e0 = journal[0];
+    if (e0.cat !== 'survival' || e0.msg !== 'smoke entry one' || !(Number.isInteger(e0.day) && e0.day >= 1))
+      throw new Error('M19: entry must be {cat, msg, day}: ' + JSON.stringify(e0));
+
+    // 2. category derivation
+    const catChecks = [
+      ['fiber', 'plants'], ['eat-poisonberry', 'plants'], ['herb-cure', 'plants'],
+      ['tiger', 'animals'], ['see-crab', 'animals'], ['monkeyscream', 'animals'], ['bite', 'animals'],
+      ['storm', 'weather'], ['lightning', 'weather'], ['wet', 'weather'],
+      ['camp', 'survival'], ['water', 'survival'], ['infection', 'survival'],
+    ];
+    for (const [k, want] of catChecks) if (catOf(k) !== want)
+      throw new Error('M19: catOf(' + k + ') should be ' + want + ', got ' + catOf(k));
+
+    // 3. first sighting: park at a crab, record in range, idempotent
+    for (const k of seeSnap) learned.delete(k);
+    const cr = crabs[0];
+    park(cr.x, cr.z);
+    let expect = 0;
+    for (const sp of animals) {
+      const inR = sp.id === 'fish'
+        ? schools.some((s) => Math.hypot(s.bx - cr.x, s.bz - cr.z) < SIGHT_R)
+        : sp.pop.some((a) => Math.hypot(a.x - cr.x, a.z - cr.z) < SIGHT_R);
+      if (inR) expect++;
+    }
+    if (expect < 1) throw new Error('M19: the crab itself must be in range of its own position');
+    journal.length = 0;
+    journalTick(0.1);
+    if (!learned.has('see-crab')) throw new Error('M19: the crab should be recorded on sight');
+    const animalRows = journal.filter((q) => q.cat === 'animals');
+    if (animalRows.length !== expect)
+      throw new Error('M19: expected ' + expect + ' sighting entries, got ' + animalRows.length);
+    if (!animalRows.every((q) => q.day >= 1 && typeof q.msg === 'string' && q.msg.length > 0))
+      throw new Error('M19: sighting entries must carry a day and a message');
+    const k2 = learned.size, j2 = journal.length;
+    journalTick(0.1); journalTick(0.1);
+    if (learned.size !== k2 || journal.length !== j2)
+      throw new Error('M19: sighting should be idempotent at a fixed position');
+    for (const k of seeSnap) learned.add(k);
+
+    // 4. toggle + render: grouped categories, entries visible
+    journal.length = 0;
+    journal.push({ cat: 'plants', msg: 'smoke plant entry', day: dayOf() });
+    journal.push({ cat: 'animals', msg: 'smoke animal entry', day: dayOf() });
+    toggleJournal();
+    if (!journalOpen) throw new Error('M19: toggleJournal should open the journal');
+    const html = String(journalEl.innerHTML);
+    for (const word of ['Plants', 'Animals', 'Weather', 'Survival'])
+      if (html.indexOf(word) < 0) throw new Error('M19: the journal should list the ' + word + ' category');
+    if (html.indexOf('day ' + dayOf() + ' \u2014 smoke plant entry') < 0)
+      throw new Error('M19: entries should render as "day N \u2014 msg"');
+    if (html.indexOf('smoke animal entry') < 0)
+      throw new Error('M19: the animal entry should render too');
+    toggleJournal();
+    if (journalOpen) throw new Error('M19: toggleJournal should close the journal');
+
+    // 5. death auto-closes; dead player cannot open
+    dead = true;
+    toggleJournal();
+    journalTick(0.1);
+    if (journalOpen) throw new Error('M19: the journal should close on death');
+    dead = false;
+
+    // leave a clean state (M19)
+    journal.length = 0; journal.push(...journalSnap);
+    for (const k of learned) if (!learnedSnap.has(k)) learned.delete(k);
+    for (const k of learnedSnap) learned.add(k);
+    park(spawn.x, spawn.z);
+    if (journalOpen) throw new Error('M19: the journal should be left closed');
+    if (animals.length !== 10) throw new Error('M19: the registry must still hold 10 species: ' + animals.length);
+  }
 }
 `;
 const file = join(here, '.game-smoke.mjs');
