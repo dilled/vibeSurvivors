@@ -35,7 +35,7 @@ globalThis.document = {
 globalThis.addEventListener = () => {};
 globalThis.removeEventListener = () => {};
 globalThis.window = globalThis;
-globalThis.location = { search: '', href: 'http://localhost/' };
+globalThis.location = { search: '', href: 'http://localhost/', reload: () => {} };
 globalThis.__rafCb = null;
 globalThis.requestAnimationFrame = (cb) => { globalThis.__rafCb = cb; return 1; };
 
@@ -2242,6 +2242,65 @@ patched += `
     journal.length = 0; journal.push(...journalSnap);
     park(spawn.x, spawn.z);
     if (animals.length !== 10) throw new Error('M20: the registry must still hold 10 species: ' + animals.length);
+  }
+
+  /* ---- M21: escape / win sequence (board the raft, row past the reef) ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const learnedSnap = new Set(learned);
+    const journalSnap = journal.slice();
+    const invSnap = { ...INV };
+    const raftSnap = camp.structures.raft;
+
+    // clean board for the crossing
+    onRaft = false; won = false; wonEl.style.display = 'none'; wonEl.innerHTML = '';
+    if (raftSnap) { scene.remove(raftSnap); camp.structures.raft = null; }
+
+    // 1. no raft: E is a no-op with respect to boarding
+    park(camp.x, camp.z);
+    actUse(); actUse(); actUse();
+    if (onRaft) throw new Error('M21: E must not board when no raft is built');
+    if (learned.has('sail')) throw new Error('M21: no sail learn without a raft');
+
+    // 2. build the raft, board within reach, unboard again
+    INV.wood = RAFT_WOOD; INV.rope = RAFT_ROPE;
+    park(camp.x, camp.z);
+    actBuildRaft();
+    const raft = camp.structures.raft;
+    if (!raft) throw new Error('M21: the raft should be built');
+    park(raft.position.x, raft.position.z);
+    actUse();
+    if (onRaft !== true) throw new Error('M21: E near the raft should board it');
+    if (!learned.has('sail')) throw new Error('M21: the sail journal entry is missing');
+    actUse();
+    if (onRaft !== false) throw new Error('M21: E again near the raft should unboard');
+
+    // 3. re-board and row out past WIN_R: the win freezes the sim
+    actUse();
+    if (onRaft !== true) throw new Error('M21: re-boarding should work');
+    raft.position.set(0, WATER, WIN_R + 10);
+    rig.position.set(0, WATER + 0.7, WIN_R + 10);
+    pump(3);
+    if (won !== true) throw new Error('M21: rowing past WIN_R should win');
+    if (started !== false) throw new Error('M21: the win should freeze the sim (started)');
+    if (onRaft !== false) throw new Error('M21: the win should clear onRaft');
+    if (wonEl.style.display !== 'flex') throw new Error('M21: the win overlay should show');
+    if (String(wonEl.innerHTML).indexOf('YOU LEFT THE ISLAND') < 0)
+      throw new Error('M21: the win overlay should announce the escape');
+    if (!journal.some((e) => e.cat === 'survival' && e.msg.indexOf('island') >= 0))
+      throw new Error('M21: the escape should log a survival journal line');
+
+    // leave a clean state (M21)
+    won = false; onRaft = false; started = true;
+    wonEl.style.display = 'none'; wonEl.innerHTML = '';
+    if (camp.structures.raft) { scene.remove(camp.structures.raft); camp.structures.raft = null; }
+    if (raftSnap) { scene.add(raftSnap); camp.structures.raft = raftSnap; }
+    for (const k in INV) INV[k] = invSnap[k];
+    for (const k of learned) if (!learnedSnap.has(k)) learned.delete(k);
+    for (const k of learnedSnap) learned.add(k);
+    journal.length = 0; journal.push(...journalSnap);
+    park(spawn.x, spawn.z);
+    if (animals.length !== 10) throw new Error('M21: the registry must still hold 10 species: ' + animals.length);
   }
 }
 `;

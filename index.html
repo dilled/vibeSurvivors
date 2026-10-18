@@ -68,6 +68,17 @@
   }
   #dead p { font-size: 15px; color: #9fc3dd; letter-spacing: 2px; }
   #dead b { color: #ffe9a0; }
+  #won {
+    position: fixed; inset: 0; z-index: 25; display: none; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(8,20,14,.78); color: #e8eef6;
+  }
+  #won h2 {
+    margin: 0 0 10px; font-size: 46px; font-weight: 900; letter-spacing: 10px;
+    color: #d8f0d0; text-shadow: 0 2px 18px rgba(0,0,0,.8);
+  }
+  #won p { font-size: 15px; color: #9fc3dd; letter-spacing: 2px; margin: 4px; }
+  #won b { color: #ffe9a0; }
 </style>
 </head>
 <body>
@@ -81,6 +92,7 @@
     <div class="row"><span>make fire / make spear</span><b>G &middot; B</b></div>
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
     <div class="row"><span>twist rope / build the raft</span><b>U &middot; O</b></div>
+    <div class="row"><span>board the raft &mdash; escape</span><b>E</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
     <div class="row"><span>keep the fish from a hovering pelican</span><b>Space</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
@@ -95,6 +107,7 @@
 <div id="hint">the island is unmapped &mdash; what you see is all there is</div>
 <div id="toasts"><div id="toast0"></div><div id="toast1"></div><div id="toast2"></div></div>
 <div id="dead"><h2>YOU DIED</h2><p><b>R</b> &mdash; wash ashore again (you lose what you were carrying)</p></div>
+<div id="won"></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -679,7 +692,11 @@ const overlay = document.getElementById('overlay');
 const hud = document.getElementById('hud');
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
-  if (!started) { started = true; overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }
+  if (won) {   /* M21: the win overlay owns the keys ‒ only R (reload) acts */
+    if (e.code === 'KeyR' && !e.repeat) location.reload();
+    return;
+  }
+  if (!started && !won) { started = true; overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }
   if (e.repeat) return;   /* one shot per press for actions */
   if (e.code === 'Digit1') setClockP(0.02);
   if (e.code === 'Digit2') setClockP(0.33);
@@ -688,7 +705,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyT') gameMin += 15; /* +15 game minutes */
   if (e.code === 'KeyR') {
     if (dead) respawn();
-    else { rig.position.copy(spawn); rig.position.y = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25); }
+    else {
+      if (onRaft) onRaft = false;   /* M21: leaving the raft when you rejoin the shore */
+      rig.position.copy(spawn); rig.position.y = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
+    }
   }
   if (e.code === 'KeyE') actUse();
   if (e.code === 'KeyC') eatCoconut();
@@ -721,6 +741,7 @@ const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fib
               gullEgg: 0, gullEggCooked: 0,   /* M14: gull nest eggs */
               wood: 0, rope: 0 };            /* M20: raft construction */
 let dead = false, spear = false;
+let onRaft = false, won = false;   /* M21: escape / win sequence */
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
 
 /* M8: foraged-food system. Q eats the first nonzero entry of VEG_EAT_ORDER:
@@ -2174,7 +2195,7 @@ const sharks = [];
 function updateSharks(dt) {
   if (!started || dead) return;
   const px = rig.position.x, pz = rig.position.z;
-  const inWater = heightAt(px, pz) < SHARK_IN_WATER;
+  const inWater = heightAt(px, pz) < SHARK_IN_WATER && !onRaft;   /* M21: the raft is uncounterable */
   const dawnDusk = dayFactor >= 0.25 && dayFactor < 0.5;
   const curiousR = effectiveWeather() === 'storm' ? SHARK_STORM_R : SHARK_CURIOUS_R;
   const bloodR = infectedWound && inWater ? SHARK_BLOOD_R : 0;
@@ -2959,6 +2980,18 @@ function playerPos() {
 function actUse() {
   if (dead) return;
   const { x, z, h } = playerPos();
+  /* 0. board / unboard the raft (M21) */
+  const raft = camp && camp.structures.raft;
+  if (raft && Math.hypot(raft.position.x - x, raft.position.z - z) < 2.5) {
+    onRaft = !onRaft;
+    if (onRaft) {
+      learn('sail', 'paddle: W A S D rows the raft - the open sea lies beyond the reef');
+      toast('\u{1F6A3} you board the raft');
+    } else {
+      toast('you step off the raft into the shallows');
+    }
+    return;
+  }
   /* 1. pick up a dropped coconut */
   const it = items.find((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - x, i.z - z) < 1.6);
   if (it) {
@@ -3221,6 +3254,23 @@ function actBuildRaft() {
   logLine('you lash a raft together', 'survival');
   toast('\u{1F6A3} raft built \u2014 the way off this island');
 }
+/* M21: escape ‒ row the raft past the reef and the run is won. started=false
+   freezes the whole sim (the existing gates) while the renderer keeps drawing. */
+const WIN_R = ISLAND_R + 60;   /* past max shark reach (~260u), still on the 1400u water plane */
+function winEscape() {
+  if (won) return;
+  won = true;
+  onRaft = false;
+  started = false;
+  logLine('you row out past the reef - the island shrinks behind you', 'survival');
+  const seen = [...learned].filter((k) => JOURNAL_ANIMALS.has(k)).length;
+  wonEl.innerHTML =
+    '<h2>YOU LEFT THE ISLAND</h2>' +
+    '<p>days ashore <b>' + dayOf() + '</b> &nbsp;&middot;&nbsp; discoveries <b>' + journal.length +
+    '</b> &nbsp;&middot;&nbsp; animals seen <b>' + seen + '</b></p>' +
+    '<p><b>R</b> &mdash; wash ashore again</p>';
+  wonEl.style.display = 'flex';
+}
 function eatCoconut() {
   if (dead) return;
   if (INV.coconut <= 0) { toast('no coconut to eat'); return; }
@@ -3327,6 +3377,7 @@ function useHerb() {
   toast('\u271A herb \u2014 your health improves');
 }
 const deadEl = document.getElementById('dead');
+const wonEl = document.getElementById('won');   /* M21: the win overlay */
 function checkDeath() {
   if (!dead && stats.health <= 0) {
     dead = true;
@@ -3337,6 +3388,7 @@ function respawn() {
   if (!dead) return;
   dead = false;
   deadEl.style.display = 'none';
+  onRaft = false;   /* M21: death on the raft ends the crossing */
   stats.thirst = stats.hunger = stats.health = 100;
   stats.wet = 0;
   INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
@@ -3360,6 +3412,7 @@ function respawn() {
 /* context-dependent action hint */
 const hintEl = document.getElementById('hint');
 function contextHint() {
+  if (won) return 'you have left the island - R washes you ashore again';   /* M21 */
   if (dead) return 'you are dead \u2014 R washes you ashore again';
   const { x, z, h } = playerPos();
   const threat = tigers.find((t) => (t.state === 'stalk' || t.state === 'chase') &&
@@ -3368,6 +3421,14 @@ function contextHint() {
   if (effectiveWeather() === 'storm' && stats.wet > 40 && !isDryNow())
     return 'the storm is soaking you \u2014 shelter or fire will dry you';
   if (infectedWound) return '\u2620\uFE0F your wounds fester \u2014 M uses a healing herb (' + INV.herb + ')';
+  if (camp && camp.structures.raft) {   /* M21: the raft is the way off */
+    if (onRaft) {
+      const left = Math.max(0, Math.floor(WIN_R - Math.hypot(x, z)));
+      return 'WASD - row for the open sea (' + left + ' u to go)';
+    }
+    const rp = camp.structures.raft.position;
+    if (Math.hypot(rp.x - x, rp.z - z) <= 3) return 'E - board the raft - the way off';
+  }
   if (items.some((i) => !i.taken && i.state === 'ground' && Math.hypot(i.x - x, i.z - z) < 1.6))
     return 'E \u2014 pick up the coconut';
   if (fires.some((f) => !f.cooking && COOKABLE.some((k) => INV[k] > 0) && Math.hypot(f.x - x, f.z - z) < 2.5))
@@ -3755,21 +3816,42 @@ function frame(t) {
   }
   const moving = mx !== 0 || mz !== 0;
   const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 8.5 : 5.5;
-  if (moving) {
-    const l = Math.hypot(mx, mz);
-    rig.position.x += (mx / l) * speed * dt;
-    rig.position.z += (mz / l) * speed * dt;
-    face = Math.atan2(mx, mz);
-    walkPhase += dt * speed * 1.9;
+  if (onRaft && camp.structures.raft) {   /* M21: aboard ‒ WASD rows the raft, the rig follows the deck */
+    const rp = camp.structures.raft.position;
+    const rSpeed = keys['ShiftLeft'] || keys['ShiftRight'] ? 6.0 : 4.0;
+    if (moving) {
+      const l = Math.hypot(mx, mz);
+      rp.x += (mx / l) * rSpeed * dt;
+      rp.z += (mz / l) * rSpeed * dt;
+      face = Math.atan2(mx, mz);
+      walkPhase += dt * rSpeed * 1.2;
+      camp.structures.raft.rotation.y += (face - camp.structures.raft.rotation.y) * Math.min(1, dt * 5);
+    }
+    rp.y += (WATER - rp.y) * Math.min(1, dt * 6);
+    rig.position.x = rp.x;
+    rig.position.z = rp.z;
+    rig.position.y += (WATER + 0.7 - rig.position.y) * Math.min(1, dt * 12);
+  } else {
+    if (moving) {
+      const l = Math.hypot(mx, mz);
+      rig.position.x += (mx / l) * speed * dt;
+      rig.position.z += (mz / l) * speed * dt;
+      face = Math.atan2(mx, mz);
+      walkPhase += dt * speed * 1.9;
+    }
+    if (!won) {   /* M21: once won, the rig stays frozen on the deck at sea */
+      /* keep inside the playable island */
+      const rr = Math.hypot(rig.position.x, rig.position.z);
+      if (rr > ISLAND_R * 1.05) {
+        const k = (ISLAND_R * 1.05) / rr;
+        rig.position.x *= k; rig.position.z *= k;
+      }
+      const ground = Math.max(heightAt(rig.position.x, rig.position.z), WATER - 0.25);
+      rig.position.y += (ground - rig.position.y) * Math.min(1, dt * 12);
+    }
   }
-  /* keep inside the playable island */
-  const rr = Math.hypot(rig.position.x, rig.position.z);
-  if (rr > ISLAND_R * 1.05) {
-    const k = (ISLAND_R * 1.05) / rr;
-    rig.position.x *= k; rig.position.z *= k;
-  }
-  const ground = Math.max(heightAt(rig.position.x, rig.position.z), WATER - 0.25);
-  rig.position.y += (ground - rig.position.y) * Math.min(1, dt * 12);
+  /* M21: escape ‒ row beyond the reef and the island is left behind */
+  if (onRaft && Math.hypot(rig.position.x, rig.position.z) > WIN_R) winEscape();
   const targetRot = moving ? face : rig.rotation.y;
   rig.rotation.y += (targetRot - rig.rotation.y) * Math.min(1, dt * 14);
   const sw = moving ? Math.sin(walkPhase) * 0.7 : 0;
