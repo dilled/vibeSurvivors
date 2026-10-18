@@ -93,6 +93,7 @@
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
     <div class="row"><span>twist rope / build the raft</span><b>U &middot; O</b></div>
     <div class="row"><span>board the raft &mdash; escape</span><b>E</b></div>
+    <div class="row"><span>after the escape: stay on the island (endless)</span><b>E</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
     <div class="row"><span>keep the fish from a hovering pelican</span><b>Space</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
@@ -692,8 +693,9 @@ const overlay = document.getElementById('overlay');
 const hud = document.getElementById('hud');
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
-  if (won) {   /* M21: the win overlay owns the keys ‒ only R (reload) acts */
+  if (won) {   /* M21: the win overlay owns the keys ‒ only R (reload) + E (endless) act */
     if (e.code === 'KeyR' && !e.repeat) location.reload();
+    else if (e.code === 'KeyE' && !e.repeat) startEndless();   /* M22: stay on the island */
     return;
   }
   if (!started && !won) { started = true; overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }
@@ -742,6 +744,7 @@ const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fib
               wood: 0, rope: 0 };            /* M20: raft construction */
 let dead = false, spear = false;
 let onRaft = false, won = false;   /* M21: escape / win sequence */
+let endless = false, endlessStartDay = 0, endlessStartMin = 0;   /* M22: endless mode */
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
 
 /* M8: foraged-food system. Q eats the first nonzero entry of VEG_EAT_ORDER:
@@ -1156,6 +1159,7 @@ function updateTigers(dt) {
   const active = dayFactor < 0.5;   /* dusk, night, dawn */
   const px = rig.position.x, pz = rig.position.z;
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
+  const tb = tigerBoost();   /* M22: endless pressure (0 in story) */
   for (const t of tigers) {
     if (t.atkCd > 0) t.atkCd -= dt;
     const dist = Math.hypot(px - t.x, pz - t.z);
@@ -1185,17 +1189,17 @@ function updateTigers(dt) {
         speed = TIG_SPEED.flee;
       } else {
         if (t.state === 'flee' || t.state === 'hide') t.state = 'patrol';
-        if (t.state !== 'chase' && dist < TIG_STALK_R) t.state = 'stalk';
+        if (t.state !== 'chase' && dist < TIG_STALK_R * (1 + tb)) t.state = 'stalk';
         if (t.state === 'stalk') {
           if (sprinting && dist < 8) t.state = 'chase';
           else if (dist < 3.5) t.state = 'chase';
           else if (dist > 18) t.state = 'patrol';
           dir = Math.atan2(px - t.x, pz - t.z);
-          speed = TIG_SPEED.stalk;
+          speed = TIG_SPEED.stalk * (1 + 0.4 * tb);
         } else if (t.state === 'chase') {
-          if (dist > TIG_CHASE_END) t.state = 'patrol';
+          if (dist > TIG_CHASE_END * (1 + tb)) t.state = 'patrol';
           dir = Math.atan2(px - t.x, pz - t.z);
-          speed = TIG_SPEED.chase;
+          speed = TIG_SPEED.chase * (1 + 0.4 * tb);
         } else {
           /* patrol: deterministic wander around the territory home (M12) */
           const mv = homeWander(t, TIG_WANDER);
@@ -1203,7 +1207,7 @@ function updateTigers(dt) {
           speed = mv.speed;
         }
         if ((t.state === 'stalk' || t.state === 'chase') && dist < TIG_ATTACK_R && t.atkCd <= 0) {
-          t.atkCd = TIG_ATK_CD;
+          t.atkCd = TIG_ATK_CD / (1 + tb);   /* M22: fiercer tigers recover faster */
           stats.health = Math.max(0, stats.health - TIG_ATK_DMG);
           INV.coconut = INV.fishRaw = INV.fishCooked = INV.crab = INV.crabCooked = 0;
           INV.sweetpotato = INV.sweetpotatoCooked = INV.yam = INV.yamCooked = INV.banana = INV.wildberry = 0;
@@ -2058,6 +2062,7 @@ const pelicans = [];
 function updatePelicans(dt) {
   if (!started || dead) return;
   const px = rig.position.x, pz = rig.position.z;
+  const pb = pelicanBoost();   /* M22: endless pressure (0 in story) */
   for (const p of pelicans) {
     if (p.stealCd > 0) p.stealCd -= dt;
     if (p.diveCd > 0) p.diveCd -= dt;
@@ -2082,12 +2087,12 @@ function updatePelicans(dt) {
       alt = py + 3;
       if (keys['Space']) {
         p.stealT = 0;
-        p.stealCd = PELICAN_STEAL_CD;
+        p.stealCd = PELICAN_STEAL_CD / (1 + pb);   /* M22 */
         p.fleeT = 2; p.fleeX = px; p.fleeZ = pz;
         learn('pelicansteal', 'a pelican hovers over a fish in your hand \u2014 Space keeps it');
         toast('\u{1F985} the pelican flaps off empty-handed');
       } else if (p.stealT <= 0) {
-        p.stealCd = PELICAN_STEAL_CD;
+        p.stealCd = PELICAN_STEAL_CD / (1 + pb);   /* M22 */
         INV.fishRaw--;
         learn('pelican', 'pelicans steal a raw fish from your hand during the hover');
         toast('\u{1F985} the pelican snatches the fish from your hand');
@@ -2122,8 +2127,8 @@ function updatePelicans(dt) {
         alt = py + 2;
       }
       /* hand steal: a raw fish in hand, the player close, the CD clear */
-      if (p.stealCd <= 0 && INV.fishRaw > 0 && Math.hypot(px - p.x, pz - p.z) < PELICAN_STEAL_R) {
-        p.stealT = PELICAN_STEAL_T;
+      if (p.stealCd <= 0 && INV.fishRaw > 0 && Math.hypot(px - p.x, pz - p.z) < PELICAN_STEAL_R * (1 + 0.5 * pb)) {
+        p.stealT = PELICAN_STEAL_T / (1 + pb);   /* M22: bolder pelicans steal faster */
         toast('a pelican hovers over your hand \u2014 SPACE keeps the fish');
       }
     }
@@ -3268,8 +3273,46 @@ function winEscape() {
     '<h2>YOU LEFT THE ISLAND</h2>' +
     '<p>days ashore <b>' + dayOf() + '</b> &nbsp;&middot;&nbsp; discoveries <b>' + journal.length +
     '</b> &nbsp;&middot;&nbsp; animals seen <b>' + seen + '</b></p>' +
-    '<p><b>R</b> &mdash; wash ashore again</p>';
+    '<p><b>R</b> &mdash; wash ashore again &nbsp;&middot;&nbsp; <b>E</b> &mdash; stay on the island (endless)</p>';
   wonEl.style.display = 'flex';
+}
+
+/* M22: endless mode ‒ after the win overlay the player can stay on the island.
+   The island adapts: fiercer tigers, bolder pelicans, shorter days, more storms.
+   Every escalation factor is 0 while `endless` is false, so story mode stays
+   bit-identical (the M10/M11 weather schedule included). Player-side runtime
+   state only ‒ no world rng, no seg regeneration (the schedule cache is
+   append-only; segments keep the boost that was in effect when they were
+   generated, which is 0 for every story segment). */
+function endlessDay() { return endless ? Math.max(0, dayOf() - endlessStartDay) : 0; }
+function boost(perDay, cap) { return Math.min(cap, perDay * endlessDay()); }
+function tigerBoost()   { return boost(0.12, 0.5); }   /* fiercer tigers: ranges +50 %, cd -50 % */
+function pelicanBoost() { return boost(0.15, 0.6); }   /* bolder pelicans: steal window/cd -60 % */
+function dayBoost()     { return boost(0.04, 0.5); }   /* shorter days: clock up to +50 % faster */
+function stormBoost(min) {   /* storms: weight +100 % by endless day 4 (day-1 stays gentle) */
+  if (!endless) return 0;
+  const d = Math.floor((p0 * 1800 + min) / 1800) - (endlessStartDay - 1);
+  return Math.min(1.0, 0.25 * Math.max(0, d));
+}
+function timeRate(p) { return (p < DAY_FRAC ? 0.6 : 1.2) * (1 + dayBoost()); }
+function startEndless() {
+  if (!won || endless) return;
+  endless = true;
+  won = false;
+  started = true;                       /* unfreeze the sim (the existing gates) */
+  endlessStartDay = dayOf();
+  endlessStartMin = p0 * 1800 + gameMin;
+  onRaft = false;                       /* the raft stays built at camp (re-escapable) */
+  wonEl.style.display = 'none';
+  if (camp) {
+    rig.position.set(camp.x, camp.g, camp.z);
+  } else {
+    const g = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
+    rig.position.set(spawn.x, g, spawn.z);
+  }
+  learn('endless', 'endless mode: the island you survived adapts \u2014 fiercer tigers, bolder pelicans, shorter days, more storms');
+  logLine('you stayed on the island \u2014 the run goes endless', 'survival');
+  toast('\u{1F30A} endless mode \u2014 the island adapts to you');
 }
 function eatCoconut() {
   if (dead) return;
@@ -3382,6 +3425,12 @@ function checkDeath() {
   if (!dead && stats.health <= 0) {
     dead = true;
     deadEl.style.display = 'flex';
+    if (endless) {   /* M22: the endless score is the days survived */
+      deadEl.innerHTML =
+        '<h2>YOU DIED</h2>' +
+        '<p>days survived <b>' + (dayOf() - endlessStartDay + 1) + '</b> &nbsp;&middot;&nbsp; discoveries <b>' + journal.length + '</b></p>' +
+        '<p><b>R</b> &mdash; wake at your camp (you lose what you were carrying)</p>';
+    }
   }
 }
 function respawn() {
@@ -3517,23 +3566,26 @@ const WEATHER_SKY_FLASH = new THREE.Color(0xdfe8f2);
 let weatherRng = mulberry32(SEED + WEATHER_SEED_OFFSET);
 const weather = { segs: [], forced: null, lastState: 'clear', lastMin: 0,
                   vis: { cloudy: 0, rain: 0, storm: 0 } };
-function weatherDur(state) {
+function weatherDur(state, segStart) {
   const [mn, mx] = WEATHER_DUR[state];
-  return mn + weatherRng() * (mx - mn);
+  const d = mn + weatherRng() * (mx - mn);
+  return state === 'storm' ? d * (1 + 0.3 * stormBoost(segStart)) : d;   /* M22: longer endless storms */
 }
-function weatherPick(prev) {
+function weatherPick(prev, segStart) {
   const opts = WEATHER_NEXT[prev];
+  const sb = stormBoost(segStart);   /* M22: storm weight up in endless (story: 0) */
   const r = weatherRng();
   let acc = 0;
-  for (const [st, w] of opts) { acc += w; if (r < acc) return st; }
+  for (const [st, w] of opts) { acc += (st === 'storm' ? w * (1 + sb) : w); if (r < acc) return st; }
   return opts[opts.length - 1][0];
 }
-weather.segs.push({ state: 'clear', start: 0, end: weatherDur('clear'), evs: [] });
+weather.segs.push({ state: 'clear', start: 0, end: weatherDur('clear', 0), evs: [] });
 function weatherExtend(min) {   /* lazy: one-time cost even for huge jumps */
   while (weather.segs[weather.segs.length - 1].end <= min) {
     const last = weather.segs[weather.segs.length - 1];
-    const st = weatherPick(last.state);
-    const start = last.end, end = start + weatherDur(st);
+    const start = last.end;
+    const st = weatherPick(last.state, start);
+    const end = start + weatherDur(st, start);
     const seg = { state: st, start, end, evs: [] };
     if (st === 'storm') {
       /* M11: precompute this storm's events on its own private stream with a
@@ -3790,6 +3842,7 @@ function updateSky(dt) {
             `🥥 ${INV.coconut}   🌾 ${INV.fiber}   \u{1FA95} ${INV.wood}   \u{1FAA2} ${INV.rope}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c   🥚 ${INV.gullEgg}r/${INV.gullEggCooked}c\n` +
             `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
+            (endless ? `\u{1F30A} endless ‒ day ${dayOf()}\n` : '') +   /* M22 */
             `seed ${SEED}`;
   hudText = hp;
 }
@@ -3862,7 +3915,7 @@ function frame(t) {
   /* survival: time, stats, world sim */
   if (started && !dead) {
     const pNow = (p0 + gameMin / 1800) % 1;
-    gameMin += dt * (pNow < DAY_FRAC ? 0.6 : 1.2);   /* 12h day = 20 real min, 12h night = 10 real min */
+    gameMin += dt * timeRate(pNow);   /* M22: 12h day = 20 real min, 12h night = 10; endless days run faster */
     stats.thirst = Math.max(0, stats.thirst - THIRST_RATE * dt);
     stats.hunger = Math.max(0, stats.hunger - HUNGER_RATE * dt);
     /* M11: rain/storm soaks you unless shelter or a nearby fire dries you */

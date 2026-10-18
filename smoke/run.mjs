@@ -2302,6 +2302,137 @@ patched += `
     park(spawn.x, spawn.z);
     if (animals.length !== 10) throw new Error('M21: the registry must still hold 10 species: ' + animals.length);
   }
+
+  /* ---- M22: endless mode + adaptation / escalating pressure ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const segLenAtEntry = weather.segs.length;   // story-schedule boundary (boost 0 below it)
+    const snap = {
+      endless, endlessStartDay, endlessStartMin, won, started, dead,
+      gameMin, health: stats.health, inv: { ...INV },
+      learned: new Set(learned), journal: journal.slice(),
+      deadHtml: deadEl.innerHTML, deadDisplay: deadEl.style.display,
+      raft: camp.structures.raft,
+    };
+    const restore = () => {
+      endless = snap.endless; endlessStartDay = snap.endlessStartDay; endlessStartMin = snap.endlessStartMin;
+      won = snap.won; started = snap.started; dead = snap.dead;
+      gameMin = snap.gameMin; stats.health = snap.health;
+      for (const k in INV) INV[k] = snap.inv[k];
+      learned.clear(); for (const k of snap.learned) learned.add(k);
+      journal.length = 0; journal.push(...snap.journal);
+      weather.segs.length = segLenAtEntry;   // append-only cache: truncate what M22 appended
+      deadEl.innerHTML = snap.deadHtml; deadEl.style.display = snap.deadDisplay;
+      if (camp.structures.raft) { scene.remove(camp.structures.raft); camp.structures.raft = null; }
+      if (snap.raft) { scene.add(snap.raft); camp.structures.raft = snap.raft; }
+      park(spawn.x, spawn.z);
+    };
+
+    // 1. story invariants: every escalation factor is exactly 0 before endless
+    if (endlessDay() !== 0) throw new Error('M22: story endlessDay must be 0');
+    if (tigerBoost() !== 0 || pelicanBoost() !== 0 || dayBoost() !== 0)
+      throw new Error('M22: story boosts must all be 0');
+    if (timeRate(0.3) !== 0.6 || timeRate(0.7) !== 1.2)
+      throw new Error('M22: story timeRate must be the old day/night rates');
+    if (stormBoost(gameMin) !== 0) throw new Error('M22: story stormBoost must be 0');
+
+    // 2. entry: replicate the M21 win, then stay on the island (E on the overlay)
+    onRaft = false; won = false; started = true;
+    wonEl.style.display = 'none'; wonEl.innerHTML = '';
+    if (camp.structures.raft) { scene.remove(camp.structures.raft); camp.structures.raft = null; }
+    gameMin = 0;
+    INV.wood = RAFT_WOOD; INV.rope = RAFT_ROPE;
+    park(camp.x, camp.z);
+    actBuildRaft();
+    const raft = camp.structures.raft;
+    if (!raft) throw new Error('M22: the raft should be built');
+    park(raft.position.x, raft.position.z);
+    actUse();
+    if (onRaft !== true) throw new Error('M22: E should board the raft');
+    raft.position.set(0, WATER, WIN_R + 10);
+    rig.position.set(0, WATER + 0.7, WIN_R + 10);
+    pump(3);
+    if (won !== true) throw new Error('M22: rowing past WIN_R should win');
+    startEndless();
+    if (endless !== true) throw new Error('M22: E on the win overlay should start endless');
+    if (won !== false || started !== true) throw new Error('M22: endless should unfreeze the sim');
+    if (onRaft !== false) throw new Error('M22: endless should clear onRaft');
+    if (wonEl.style.display !== 'none') throw new Error('M22: the win overlay should hide');
+    if (Math.abs(rig.position.x - camp.x) + Math.abs(rig.position.z - camp.z) > 1e-6)
+      throw new Error('M22: endless should restart the run at camp');
+    if (!learned.has('endless')) throw new Error('M22: the endless learn entry is missing');
+    if (!journal.some((e) => e.cat === 'survival' && e.msg.indexOf('endless') >= 0))
+      throw new Error('M22: the endless entry should log a survival journal line');
+    const est0 = endlessStartDay;
+    startEndless();   // idempotent: already endless, nothing may move
+    if (endlessStartDay !== est0) throw new Error('M22: re-entry must not move the endless clock');
+    pump(1);
+    if (hudText.indexOf('endless') < 0) throw new Error('M22: the HUD should show the endless day line');
+
+    // 3. ramps: per-day escalation with caps (gameMin is the raw clock; the day
+    //    index is p0*1800 + gameMin, so offset from the entry gameMin, not
+    //    from endlessStartMin which already contains p0*1800)
+    const g0 = endlessStartMin - p0 * 1800;
+    gameMin = g0 + 2 * 1800;
+    if (endlessDay() !== 2) throw new Error('M22: 2 endless days expected: ' + endlessDay());
+    if (Math.abs(tigerBoost() - 0.24) > 1e-9) throw new Error('M22: tiger ramp at day 2: ' + tigerBoost());
+    if (Math.abs(pelicanBoost() - 0.30) > 1e-9) throw new Error('M22: pelican ramp at day 2: ' + pelicanBoost());
+    if (Math.abs(dayBoost() - 0.08) > 1e-9) throw new Error('M22: day ramp at day 2: ' + dayBoost());
+    if (Math.abs(timeRate(0.3) - 0.6 * 1.08) > 1e-9) throw new Error('M22: day rate must scale by the day boost');
+    if (Math.abs(timeRate(0.7) - 1.2 * 1.08) > 1e-9) throw new Error('M22: night rate must scale by the day boost');
+    if (Math.abs(stormBoost(gameMin) - 0.5) > 1e-9) throw new Error('M22: storm ramp at day 2: ' + stormBoost(gameMin));
+    gameMin = g0 + 42 * 1800;
+    if (tigerBoost() !== 0.5 || pelicanBoost() !== 0.6 || dayBoost() !== 0.5)
+      throw new Error('M22: boosts must hit their caps at day 42');
+    if (stormBoost(gameMin) !== 1.0) throw new Error('M22: storm boost must cap at 1.0');
+
+    // 4. storm escalation + exact replay: story segs keep boost 0 (generation-time
+    //    boost), segs generated in endless use stormBoost(segStart)
+    weatherExtend(gameMin + 36000);
+    const es = weather.segs.find((s) => s.state === 'storm' && s.start >= endlessStartMin);
+    if (!es) throw new Error('M22: the endless tail of the schedule should contain a storm');
+    {
+      const wr = mulberry32(SEED + WEATHER_SEED_OFFSET);
+      const rdur = (s, s0, sb) => {
+        const d = WEATHER_DUR[s];
+        const v = d[0] + wr() * (d[1] - d[0]);
+        return s === 'storm' ? v * (1 + 0.3 * sb) : v;
+      };
+      const rep = [{ state: 'clear', start: 0, end: rdur('clear', 0, 0) }];
+      for (let i = 1; i < weather.segs.length; i++) {
+        const s0 = rep[i - 1].end;
+        const sb = i >= segLenAtEntry ? stormBoost(s0) : 0;   // boost at generation time
+        const opts = WEATHER_NEXT[rep[i - 1].state];
+        const r = wr(); let acc = 0; let st = opts[opts.length - 1][0];
+        for (const [o, w] of opts) { acc += (o === 'storm' ? w * (1 + sb) : w); if (r < acc) { st = o; break; } }
+        rep.push({ state: st, start: s0, end: s0 + rdur(st, s0, sb) });
+      }
+      for (let i = 0; i < rep.length; i++) {
+        if (weather.segs[i].state !== rep[i].state)
+          throw new Error('M22: weather replay seg ' + i + ' state mismatch');
+        if (Math.abs(weather.segs[i].end - rep[i].end) > 1e-9)
+          throw new Error('M22: weather replay seg ' + i + ' end mismatch');
+      }
+    }
+
+    // 5. death in endless: the overlay shows the days-survived score, respawn is
+    //    the spec-correct camp respawn with carried loot lost
+    INV.coconut = 1;
+    stats.health = 0;
+    checkDeath();
+    if (dead !== true) throw new Error('M22: 0 health should kill');
+    if (deadEl.style.display !== 'flex') throw new Error('M22: the dead overlay should show');
+    if (String(deadEl.innerHTML).indexOf('days survived') < 0)
+      throw new Error('M22: the endless death overlay should show the days-survived score');
+    respawn();
+    if (dead !== false) throw new Error('M22: respawn should wake the player');
+    if (INV.coconut !== 0) throw new Error('M22: respawn should drop the carried loot');
+    if (Math.abs(rig.position.x - camp.x) + Math.abs(rig.position.z - camp.z) > 1e-6)
+      throw new Error('M22: endless respawn should wake at camp');
+
+    restore();
+    if (animals.length !== 10) throw new Error('M22: the registry must still hold 10 species: ' + animals.length);
+  }
 }
 `;
 const file = join(here, '.game-smoke.mjs');
