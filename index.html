@@ -4481,6 +4481,69 @@ function frame(t) {
   pt('render');   /* M24: the WebGL frame itself */
 }
 requestAnimationFrame(frame);
+
+/* ----------------------- multiplayer (optional, M27) -----------------------
+ * Append ?mp=host:port to the URL to connect to a VibeSurvivors relay server
+ * (ServerBase/VibeSurvivorsPlugin). Without it the game runs exactly as
+ * before (single-player, zero behavior change). This hook only attaches the
+ * connect/relay client; remote-player presence rendering is M28.
+ */
+{
+  const mpUrl = new URLSearchParams(location.search).get('mp');
+  if (mpUrl) {
+    const askMpName = () => {
+      try {
+        const saved = localStorage.getItem('vsvName');
+        if (saved !== null) return Promise.resolve(saved);
+      } catch (e) { /* private mode: roll a random name in mp.js */ }
+      return new Promise(resolve => {
+        const box = document.createElement('div');
+        box.style.cssText = 'position:fixed;inset:0;z-index:50;display:flex;align-items:center;'
+          + 'justify-content:center;background:rgba(0,0,0,.65);font-family:monospace;';
+        const panel = document.createElement('div');
+        panel.style.cssText = 'background:#1a2415;border:2px solid #9fd87a;border-radius:8px;'
+          + 'padding:20px 26px;text-align:center;color:#e8f0e0;max-width:92vw;';
+        const title = document.createElement('div');
+        title.style.cssText = 'font-size:16px;margin-bottom:6px;';
+        title.textContent = 'Who are you?';
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:12px;color:rgba(232,240,224,.6);margin-bottom:14px;';
+        sub.textContent = 'name (leave empty for a random one) — saved in this browser';
+        const input = document.createElement('input');
+        input.maxLength = 24;
+        input.placeholder = 'your name';
+        input.style.cssText = 'box-sizing:border-box;width:280px;display:block;margin:0 auto 14px;'
+          + 'background:rgba(0,0,0,.4);border:1px solid #9fd87a;border-radius:4px;color:#e8f0e0;'
+          + 'font-family:monospace;font-size:14px;padding:6px 8px;text-align:center;outline:none;';
+        const play = document.createElement('button');
+        play.textContent = 'play';
+        play.style.cssText = 'font-family:monospace;font-size:15px;padding:7px 28px;cursor:pointer;'
+          + 'border-radius:4px;border:none;background:#9fd87a;color:#1a2415;font-weight:bold;';
+        const done = () => {
+          const name = input.value.trim().slice(0, 24);   // empty = random in mp.js
+          try { localStorage.setItem('vsvName', name); } catch (e) {}
+          box.remove();
+          resolve(name);
+        };
+        input.addEventListener('keydown', e => {
+          e.stopPropagation();      // don't let typing drive the game
+          if (e.key === 'Enter') done();
+        });
+        play.addEventListener('click', done);
+        panel.append(title, sub, input, play);
+        box.appendChild(panel);
+        document.body.appendChild(box);
+        input.focus();
+      });
+    };
+    const mp = await import('./lib/mp.js');
+    mp.attachMultiplayer({
+      rig, url: mpUrl, seed: SEED,
+      displayName: await askMpName(),
+      inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
+    });
+  }
+}
 </script>
 </body>
 </html>

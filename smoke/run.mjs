@@ -12,6 +12,7 @@ function makeEl() {
     style: {},
     addEventListener: () => {},
     appendChild: () => {},
+    remove: () => {},   /* M27: the MP HUD / name-prompt panels detach themselves */
     getContext: () => ({
       createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
       putImageData: () => {},
@@ -69,6 +70,9 @@ class AudioContextStub {
 }
 globalThis.AudioContext = AudioContextStub;
 globalThis.window.AudioContext = AudioContextStub;
+/* M27: count WebSocket constructions — must stay 0 without ?mp= (single-player untouched) */
+globalThis.__wsCtor = 0;
+globalThis.WebSocket = class { constructor() { globalThis.__wsCtor++; } };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(join(here, '..', 'index.html'), 'utf8');
@@ -3229,6 +3233,164 @@ patched += `
     if (animals.length !== 10) throw new Error('M26: the registry must still hold 10 species');
   }
 
+}
+
+/* ---- M27: multiplayer client (lib/mp.js) protocol ---- */
+{
+  /* 1. the single-player page must not have touched WebSocket at all
+   *    (location.search is '' in the smoke, so the ?mp= hook is inert) */
+  if (globalThis.__wsCtor !== 0)
+    throw new Error('M27: a WebSocket was constructed without ?mp= (single-player changed)');
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const tickLog = [];
+    const rigStub = { position: { x: 1.5, y: 2.25, z: -3.5 }, rotation: { y: 0.75 } };
+    const api = mp.attachMultiplayer({
+      rig: rigStub, url: '127.0.0.1:3003', seed: 1337, displayName: 'SmokeTester',
+      inWater: () => true, onTick: (tickId, rem, auth) => tickLog.push({ tickId, auth, n: rem.size }),
+    });
+
+    /* 2. connect: bare host:port gets wss://, the 30 Hz send loop starts */
+    if (wsInstances.length !== 1 || wsInstances[0].url !== 'wss://127.0.0.1:3003')
+      throw new Error('M27: ws did not connect to wss://host:port');
+    if (intervals.length !== 1 || intervals[0].ms !== (1000 / 30))
+      throw new Error('M27: the 30 Hz state send loop is missing');
+
+    /* 3. join: type 3 "<uuid>|1|1337" (mp.js assigns ws.onopen — invoke it as OPEN) */
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    let j = wsInstances[0].sent.at(-1);
+    j = j instanceof Uint8Array ? j : new Uint8Array(j);
+    if (j[0] !== 3) throw new Error('M27: join is not type 3');
+    const joinText = new TextDecoder().decode(j.subarray(1));
+    const jParts = joinText.split('|');
+    if (jParts.length !== 3 || jParts[1] !== '1' || jParts[2] !== '1337')
+      throw new Error('M27: join payload is not "<id>|1|1337": ' + joinText);
+
+    /* 4. join success: publicId is BIG-endian, the name is sent right after */
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 7, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 7) throw new Error('M27: big-endian publicId not parsed (got ' + api.publicId + ')');
+    if (!/SmokeTester/.test(api.status()) || !/id 7/.test(api.status()))
+      throw new Error('M27: status line wrong: ' + api.status());
+    let nm = wsInstances[0].sent.at(-1);
+    nm = nm instanceof Uint8Array ? nm : new Uint8Array(nm);
+    if (nm[0] !== 31 || new TextDecoder().decode(nm.subarray(1)) !== 'SmokeTester')
+      throw new Error('M27: name frame is not [31][utf8]');
+
+    /* 5. 30 Hz state frame: [26][u32 id LE][f32 x,y,z,yaw LE][u8 state bit0] */
+    intervals[0].fn();
+    let st = wsInstances[0].sent.at(-1);
+    st = st instanceof Uint8Array ? st : new Uint8Array(st);
+    if (st[0] !== 26 || st.byteLength !== 22) throw new Error('M27: state frame is not [26][21B]');
+    const sDv = new DataView(st.buffer, st.byteOffset, st.byteLength);
+    if (sDv.getUint32(1, true) !== 7 || Math.abs(sDv.getFloat32(5, true) - 1.5) > 1e-6
+        || Math.abs(sDv.getFloat32(9, true) - 2.25) > 1e-6 || Math.abs(sDv.getFloat32(13, true) + 3.5) > 1e-6
+        || Math.abs(sDv.getFloat32(17, true) - 0.75) > 1e-6 || st[21] !== 1)
+      throw new Error('M27: state payload fields wrong');
+
+    /* 6. tick parse: players + names, with the reserved edits/animals sections
+   *    present and correctly skipped (flags 0x0D = players|edits|names) */
+    const buildTick = (flags, auth, tickId, players, editCount, animalCount, names) => {
+      const parts = [new Uint8Array([27, flags])];
+      let buf;
+      const head = new DataView(new ArrayBuffer(4));
+      head.setUint32(0, auth, true);
+      parts.push(new Uint8Array(head.buffer));
+      const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
+      if (flags & 1) {
+        parts.push(w32(tickId), w32(players.length));
+        for (const p of players) {
+          const b = new DataView(new ArrayBuffer(21));
+          b.setUint32(0, p.id, true);
+          b.setFloat32(4, p.x, true); b.setFloat32(8, p.y, true);
+          b.setFloat32(12, p.z, true); b.setFloat32(16, p.yaw, true);
+          b.setUint8(20, p.state);
+          parts.push(new Uint8Array(b.buffer));
+        }
+      }
+      if (flags & 2) parts.push(w32(editCount), new Uint8Array(editCount * 19));   // reserved M29 payload
+      if (flags & 4) parts.push(w32(animalCount), new Uint8Array(animalCount * 24));   // reserved M30 payload
+      if (flags & 8) {
+        parts.push(w32(names.length));
+        for (const n of names) {
+          parts.push(w32(n.id), w32(n.name.length), new TextEncoder().encode(n.name));
+        }
+      }
+      const total = parts.reduce((a, p) => a + p.length, 0);
+      buf = new Uint8Array(total);
+      let off = 0;
+      for (const p of parts) { buf.set(p, off); off += p.length; }
+      return buf;
+    };
+    const t1 = buildTick(0x0D, 7, 42,
+      [{ id: 7, x: 1.5, y: 2.25, z: -3.5, yaw: 0.75, state: 1 },
+       { id: 9, x: 5.5, y: 0, z: -5.5, yaw: 1, state: 0 }],
+      2, 0, [{ id: 9, name: 'Bob' }]);
+    wsInstances[0].onmessage({ data: t1.buffer.slice(0) });
+    if (tickLog.length !== 1 || tickLog[0].tickId !== 42 || tickLog[0].auth !== 7)
+      throw new Error('M27: onTick did not fire with tickId/authority');
+    if (api.authorityId !== 7) throw new Error('M27: authorityId not stored');
+    if (api.remotes.size !== 1 || api.remotes.has(7))
+      throw new Error('M27: remotes must hold only the remote (self excluded)');
+    const r = api.remotes.get(9);
+    if (!r || Math.abs(r.x - 5.5) > 1e-6 || r.yaw !== 1 || r.underwater !== false || r.name !== 'Bob')
+      throw new Error('M27: remote parsed wrong: ' + JSON.stringify(r));
+
+    /* 7. animals section present too (flags 0x0F) and still parsed right */
+    const t2 = buildTick(0x0F, 7, 43,
+      [{ id: 9, x: 6, y: 0, z: -5, yaw: 1.1, state: 1 }],
+      0, 3, []);
+    wsInstances[0].onmessage({ data: t2.buffer.slice(0) });
+    if (tickLog.length !== 2 || tickLog[1].tickId !== 43)
+      throw new Error('M27: the animals-skip tick was not consumed');
+    const r2 = api.remotes.get(9);
+    if (!r2 || Math.abs(r2.x - 6) > 1e-6 || r2.underwater !== true || r2.name !== 'Bob')
+      throw new Error('M27: updated remote parsed wrong: ' + JSON.stringify(r2));
+
+    /* 8. a remote that leaves the session is dropped from the map */
+    const t3 = buildTick(0x01, 0, 44, [{ id: 7, x: 1.5, y: 2.25, z: -3.5, yaw: 0.75, state: 0 }], 0, 0, []);
+    wsInstances[0].onmessage({ data: t3.buffer.slice(0) });
+    if (api.remotes.size !== 0) throw new Error('M27: a departed remote was not dropped');
+
+    /* 9. drop + reconnect: the backoff timer re-arms a fresh socket */
+    if (timeouts.length !== 0) throw new Error('M27: an unexpected timer before close');
+    wsInstances[0].onclose();
+    if (timeouts.length !== 1 || timeouts[0].ms !== 1000)
+      throw new Error('M27: no 1 s reconnect backoff on close');
+    timeouts[0].fn();
+    if (wsInstances.length !== 2)
+      throw new Error('M27: the reconnect did not open a fresh socket');
+    wsInstances[1].readyState = 1;
+    wsInstances[1].onopen();
+    let j2 = wsInstances[1].sent.at(-1);
+    j2 = j2 instanceof Uint8Array ? j2 : new Uint8Array(j2);
+    if (j2[0] !== 3)
+      throw new Error('M27: the reconnected socket did not rejoin with type 3');
+
+    api.close();
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+  }
 }
 `;
 const file = join(here, '.game-smoke.mjs');
