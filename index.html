@@ -309,6 +309,28 @@ function setM(i, mesh, px, py, pz, rx, ry, rz, sx, sy, sz) {
   M4.compose(V, Q, S);
   mesh.setMatrixAt(i, M4);
 }
+/* M24: LOD ‒ the renderer switches to one shared low-poly box proxy beyond
+   LOD_FAR u (from the player). Wrapping keeps the pop entry's grp contract
+   unchanged: position.set/rotation.y/visible on the LOD move/hide the whole
+   animal; the detail group becomes the LOD-local origin. */
+const LOD_FAR = 70;
+const LOD_PROXY_GEO = new THREE.BoxGeometry(1, 1, 1);
+const lodProxyMats = {};
+function makeLod(grp, w, h, d, color) {
+  let mat = lodProxyMats[color];
+  if (!mat) { mat = new THREE.MeshLambertMaterial({ color }); lodProxyMats[color] = mat; }
+  const proxy = new THREE.Mesh(LOD_PROXY_GEO, mat);
+  proxy.position.y = h / 2;
+  proxy.scale.set(w, h, d);
+  const lod = new THREE.LOD();
+  lod.addLevel(grp, 0);
+  lod.addLevel(proxy, LOD_FAR);
+  lod.position.copy(grp.position);
+  grp.position.set(0, 0, 0);
+  scene.remove(grp);
+  scene.add(lod);
+  return lod;
+}
 
 {
   /* palm trunks */
@@ -733,6 +755,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyU') actCraftRope();   /* M20: twist rope from fiber */
   if (e.code === 'KeyO') actBuildRaft();   /* M20: build the raft at camp */
   if (e.code === 'KeyP') toggleMute();   /* M23: mute / unmute */
+  if (e.code === 'F8') showPerf = !showPerf;   /* M24: section profiler HUD line */
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -979,8 +1002,9 @@ const crabs = [];
     const m = buildCrabGroup(bodyMat, legMat);
     m.grp.position.set(p.x, p.h, p.z);
     scene.add(m.grp);
+    const lod = makeLod(m.grp, 0.7, 0.3, 0.5, 0xc05a33);   /* M24 */
     crabs.push({ x: p.x, z: p.z, hx: p.x, hz: p.z, dir: rng() * Math.PI * 2,
-                turnT: rng() * 2, fleeT: 0, grp: m.grp, legs: m.legs, alive: true });
+                turnT: rng() * 2, fleeT: 0, grp: lod, legs: m.legs, alive: true });
   }
 }
 function updateCrabs(dt) {
@@ -1090,7 +1114,7 @@ function buildTigerMesh(x, g, z) {
     }
   grp.position.set(x, g, z);
   scene.add(grp);
-  return { grp, legs };
+  return { grp: makeLod(grp, 0.8, 1.2, 2.2, 0xc46a2c), legs };   /* M24 */
 }
 
 const tigers = [];
@@ -1129,8 +1153,9 @@ const tigers = [];
     const m = buildCrabGroup(bodyMat, legMat);
     m.grp.position.set(x, heightAt(x, z), z);
     scene.add(m.grp);
+    const lod = makeLod(m.grp, 0.7, 0.3, 0.5, 0xc05a33);   /* M24 */
     crabs.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2,
-                turnT: rng() * 2, fleeT: 0, grp: m.grp, legs: m.legs, alive: true });
+                turnT: rng() * 2, fleeT: 0, grp: lod, legs: m.legs, alive: true });
   }
 }
 
@@ -1275,7 +1300,7 @@ function buildGullMesh(x, g, z) {
   grp.add(wingL, wingR);
   grp.position.set(x, g, z);
   scene.add(grp);
-  return { grp, wingL, wingR };
+  return { grp: makeLod(grp, 1.0, 0.3, 0.8, 0xeef1f3), wingL, wingR };   /* M24 */
 }
 
 const gulls = [];
@@ -1554,7 +1579,7 @@ function buildMonkeyMesh(x, g, z) {
     }
   grp.position.set(x, g, z);
   scene.add(grp);
-  return { grp, legs };
+  return { grp: makeLod(grp, 0.6, 1.0, 0.7, 0x7c5a3a), legs };   /* M24 */
 }
 
 const monkeys = [];
@@ -1684,7 +1709,7 @@ function buildLizardMesh(x, g, z) {
     }
   grp.position.set(x, g, z);
   scene.add(grp);
-  return { grp, legs };
+  return { grp: makeLod(grp, 0.6, 0.5, 1.6, 0x557a3a), legs };   /* M24 */
 }
 
 const lizards = [];
@@ -1829,7 +1854,7 @@ function buildSnakeMesh(x, g, z, venom) {
   grp.add(head);
   grp.position.set(x, g, z);
   scene.add(grp);
-  return { grp, segs, head };
+  return { grp: makeLod(grp, 0.4, 0.4, 2.0, venom ? 0x3d5c4a : 0x8a7a5a), segs, head };   /* M24 */
 }
 
 const snakes = [];
@@ -2004,8 +2029,9 @@ const NEST_EGGS = 3;
     const m = buildCrabGroup(bodyMat, legMat);
     m.grp.position.set(x, heightAt(x, z), z);
     scene.add(m.grp);
+    const lod = makeLod(m.grp, 0.7, 0.3, 0.5, 0xc05a33);   /* M24 */
     crabs.push({ x, z, hx: x, hz: z, dir: rng() * Math.PI * 2,
-                turnT: rng() * 2, fleeT: 0, grp: m.grp, legs: m.legs, alive: true });
+                turnT: rng() * 2, fleeT: 0, grp: lod, legs: m.legs, alive: true });
   }
 }
 
@@ -2041,7 +2067,7 @@ function buildPelicanMesh(x, y, z) {
   grp.add(wingL, wingR);
   grp.position.set(x, y, z);
   scene.add(grp);
-  return { grp, wingL, wingR };
+  return { grp: makeLod(grp, 1.5, 0.8, 1.3, 0xf5f2ea), wingL, wingR };   /* M24 */
 }
 
 const pelicans = [];
@@ -2192,7 +2218,7 @@ function buildSharkMesh(x, y, z) {
   grp.add(body, tail, dorsal);
   grp.position.set(x, y, z);
   scene.add(grp);
-  return grp;
+  return makeLod(grp, 1.0, 0.9, 2.6, 0x47555f);   /* M24 */
 }
 
 const sharks = [];
@@ -2325,7 +2351,7 @@ function buildSpiderMesh(x, g, z) {
     }
   grp.position.set(x, g, z);
   scene.add(grp);
-  return { grp, legs };
+  return { grp: makeLod(grp, 0.7, 0.5, 0.9, 0x241d18), legs };   /* M24 */
 }
 
 const spiders = [];
@@ -3773,21 +3799,22 @@ function updateWeather(dt) {
   weather.lastState = st;
   weather.lastMin = gameMin;
 }
-/* rain streaks: rig-attached group of falling boxes (stub-safe: no Points) */
+/* rain streaks: one InstancedMesh of falling boxes in a rig-attached group
+   (M24: 90 draws -> 1; DynamicDrawUsage matrices rewritten while raining) */
 const rainGrp = new THREE.Group();
 rainGrp.visible = false;
 scene.add(rainGrp);
 const rainDrops = [];
+let rainMesh = null;
 {
   const dropRng = mulberry32(SEED + 4242);
   const dropGeo = new THREE.BoxGeometry(0.02, 0.5, 0.02);
   const dropMat = new THREE.MeshBasicMaterial({ color: 0xa8c8dc, transparent: true, opacity: 0.5 });
+  rainMesh = new THREE.InstancedMesh(dropGeo, dropMat, 90);
+  rainMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  rainGrp.add(rainMesh);
   for (let i = 0; i < 90; i++) {
-    const d = { x: (dropRng() * 2 - 1) * 7, z: (dropRng() * 2 - 1) * 7, y: dropRng() * 9 };
-    const m = new THREE.Mesh(dropGeo, dropMat);
-    m.position.set(d.x, d.y, d.z);
-    rainGrp.add(m);
-    rainDrops.push({ x: d.x, z: d.z, y: d.y, mesh: m });
+    rainDrops.push({ x: (dropRng() * 2 - 1) * 7, z: (dropRng() * 2 - 1) * 7, y: dropRng() * 9 });
   }
 }
 function updateRain(dt) {
@@ -3795,11 +3822,13 @@ function updateRain(dt) {
   rainGrp.visible = true;
   const fall = 14 + 8 * weather.vis.storm;   /* M11: storm wind drives harder */
   const lean = 2.5 * weather.vis.storm;
-  for (const d of rainDrops) {
+  for (let i = 0; i < rainDrops.length; i++) {
+    const d = rainDrops[i];
     d.y -= fall * dt;
     if (d.y < 0.3) d.y += 9;
-    d.mesh.position.set(rig.position.x + d.x + lean, rig.position.y + d.y, rig.position.z + d.z);
+    setM(i, rainMesh, rig.position.x + d.x + lean, rig.position.y + d.y, rig.position.z + d.z, 0, 0, 0, 1, 1, 1);
   }
+  rainMesh.instanceMatrix.needsUpdate = true;
 }
 
 /* ---------------- day / night ---------------- */
@@ -3809,8 +3838,28 @@ function updateRain(dt) {
 const DAY_FRAC = 2 / 3;
 let gameMin = 0;  /* extra game minutes on top of p0 (T key adds to this) */
 let p0 = 0.1;      /* start ~08:00 */
-{ /* dev params: ?t=0..1 time of day, ?start=1 skip the title overlay */
+/* M24: lightweight section profiler. Read-only over game state, display-only
+   (zero rng, zero gameplay effect). pt(name) marks a frame boundary; the
+   elapsed time since the previous mark is attributed to `name` (EMA 0.9/0.1).
+   Hidden by default; ?perf=1 at load or F8 toggles the HUD line. (F itself
+   already eats a fish.) */
+const perf = { on: false, ms: {}, avg: {}, frames: 0 };
+let showPerf = false;
+let __perfLast = 0;
+function pt(name) {
+  if (!showPerf) return;
+  const now = performance.now();
+  if (__perfLast) {
+    const d = now - __perfLast;
+    perf.ms[name] = d;
+    perf.avg[name] = (name in perf.avg ? perf.avg[name] : d) * 0.9 + d * 0.1;
+    perf.on = true;
+  }
+  __perfLast = now;
+}
+{ /* dev params: ?t=0..1 time of day, ?start=1 skip the title overlay, ?perf=1 section profiler */
   const __q = new URLSearchParams(location.search);
+  if (__q.has('perf')) showPerf = true;
   if (['t'].some((k) => __q.has(k))) p0 = Math.min(0.999, Math.max(0, parseFloat(__q.get('t')) || 0));
   const __w = __q.get('weather');
   if (__w === 'clear' || __w === 'cloudy' || __w === 'rain' || __w === 'storm') setWeatherDebug(__w);
@@ -3888,6 +3937,9 @@ function updateSky(dt) {
             `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
             (endless ? `\u{1F30A} endless ‒ day ${dayOf()}\n` : '') +   /* M22 */
+            (showPerf ? `\u23F1 ms ` + ['stats', 'animE', 'sky', 'animL', 'plants', 'render']
+              .map((k) => k + ' ' + (k in perf.avg ? perf.avg[k].toFixed(1) : '-')).join('  ')
+              + '  drawcalls ' + (renderer.info && renderer.info.render ? renderer.info.render.calls : 0) + '\n' : '') +   /* M24 */
             `seed ${SEED}`;
   hudText = hp;
 }
@@ -4078,6 +4130,7 @@ function frame(t) {
   lastT = t;
   if (dt > 0) { fpsAcc += 1 / dt; fpsN++; }
   if (fpsN >= 20) { fps = fpsAcc / fpsN; fpsAcc = 0; fpsN = 0; }
+  if (showPerf) { perf.frames++; __perfLast = performance.now(); }   /* M24 */
 
   /* movement: camera is fixed behind +z, so W/S = ∓z, A/D = ∓x */
   let mx = 0, mz = 0;
@@ -4163,6 +4216,7 @@ function frame(t) {
     strikeCd = Math.max(0, strikeCd - dt);
     checkDeath();
   }
+  pt('stats');   /* M24: movement + survival stats block */
   runT += dt;
   mapTick(dt);   /* M18: walked cells + proximity discovery (player-side only) */
   journalTick(dt);   /* M19: first-sighting discoveries (player-side only) */
@@ -4172,18 +4226,23 @@ function frame(t) {
   updateTorchLights(dt);
   updateAlarms(dt);   /* M16: one decay per frame; early + late see the same set */
   updateAnimals(dt, 'early');   /* M12: fish + crabs, pre-frame dayFactor (before weather/sky) */
+  pt('animE');   /* M24: items + fires + torches + alarms + early animals */
   hintEl.textContent = contextHint();
 
   updateWeather(dt);
   updateSky(dt);
   updateRain(dt);
+  pt('sky');   /* M24: weather + sky + rain */
   updateAnimals(dt, 'late');    /* M12: tigers then gulls, after updateSky so dayFactor is fresh */
   audioTick(dt);     /* M23: bed gains + ambient cues + footsteps (read-only) */
+  pt('animL');   /* M24: late animals + audio tick */
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   mapDraw(dt);   /* M18: throttled redraw while the paper map is open */
   updateCamera();
+  pt('plants');   /* M24: plants + HUD + map + camera */
   renderer.render(scene, camera);
+  pt('render');   /* M24: the WebGL frame itself */
 }
 requestAnimationFrame(frame);
 </script>

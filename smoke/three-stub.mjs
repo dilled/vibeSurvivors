@@ -94,6 +94,11 @@ class Node {
 }
 
 export class Group extends Node {}
+export class LOD extends Node {
+  constructor() { super(); this.levels = []; }
+  addLevel(obj, distance) { this.levels.push({ distance, level: obj }); this.children.push(obj); }
+  update() {}
+}
 export class Mesh extends Node {
   constructor(geometry, material) { super(); this.geometry = geometry; this.material = material; }
 }

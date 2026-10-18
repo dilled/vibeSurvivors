@@ -1961,8 +1961,8 @@ patched += `
       if (sp.pop.some((a) => !isFinite(a.x) || !isFinite(a.z)))
         throw new Error('M17: the ' + sp.id + ' population has a NaN position');
     }
-    if (spiders.some((s) => !s.grp || s.grp.children.length < 8 || !isFinite(s.grp.position.x) ||
-        !isFinite(s.grp.position.y) || !isFinite(s.grp.position.z)))
+    if (spiders.some((s) => !s.grp || !s.grp.levels || s.grp.levels[0].level.children.length < 8 ||
+        !isFinite(s.grp.position.x) || !isFinite(s.grp.position.y) || !isFinite(s.grp.position.z)))
       throw new Error('M17: a spider mesh is missing or NaN');
 
     // 3. day: the spiders hold at their dens, nothing is stolen
@@ -2540,6 +2540,75 @@ patched += `
     INV.coconut = 0; INV.fishCooked = 0;
     setWeatherDebug('clear');
     if (animals.length !== 10) throw new Error('M23: the registry must still hold 10 species: ' + animals.length);
+  }
+
+  /* ---- M24: performance pass (instancing, LOD, profiling) ---- */
+  {
+    // 1. every animal pop entry is a 2-level LOD: detail at 0, shared proxy at LOD_FAR
+    const lodCheck = (arr, name) => {
+      for (const e of arr) {
+        const g = e.grp;
+        if (!g || !Array.isArray(g.levels) || g.levels.length !== 2)
+          throw new Error('M24: the ' + name + ' grp must be a 2-level LOD');
+        if (g.levels[0].distance !== 0)
+          throw new Error('M24: the ' + name + ' detail level must sit at distance 0');
+        if (g.levels[1].distance !== LOD_FAR)
+          throw new Error('M24: the ' + name + ' proxy level must sit at LOD_FAR');
+      }
+    };
+    lodCheck(crabs, 'crab'); lodCheck(tigers, 'tiger'); lodCheck(gulls, 'gull');
+    lodCheck(pelicans, 'pelican'); lodCheck(monkeys, 'monkey'); lodCheck(lizards, 'lizard');
+    lodCheck(snakes, 'snake'); lodCheck(sharks, 'shark'); lodCheck(spiders, 'spider');
+
+    // 2. detail groups are zeroed LOD-local; the LOD holds the world position (no double offset)
+    const c0 = crabs[0];
+    if (c0.grp.levels[0].level.position.x !== 0 || c0.grp.levels[0].level.position.y !== 0 ||
+        c0.grp.levels[0].level.position.z !== 0)
+      throw new Error('M24: the crab detail group must be LOD-local (zeroed)');
+    if (Math.abs(c0.grp.position.x - c0.x) > 1e-6 || Math.abs(c0.grp.position.z - c0.z) > 1e-6)
+      throw new Error('M24: the crab LOD must hold the world position (no double offset)');
+    if (tigers.some((t) => t.grp.levels[0].level.position.x !== 0 ||
+        t.grp.levels[0].level.position.z !== 0))
+      throw new Error('M24: the tiger detail groups must be LOD-local (zeroed)');
+
+    // 3. rain: 90 individual meshes -> ONE InstancedMesh(90) inside rainGrp, matrices per frame
+    if (rainGrp.children.length !== 1)
+      throw new Error('M24: rainGrp must hold exactly one instanced mesh: ' + rainGrp.children.length);
+    const rm = rainGrp.children[0];
+    if (rm.constructor.name !== 'InstancedMesh' || rm.count !== 90)
+      throw new Error('M24: the rain must be one InstancedMesh of count 90');
+    if (!rm.instanceMatrix) throw new Error('M24: the rain mesh must expose instanceMatrix');
+    const rm0 = rm._count || 0;
+    setWeatherDebug('rain'); pump(60);
+    if (!rainGrp.visible) throw new Error('M24: the rain must be visible while weather.vis.rain > 0.5');
+    if ((rm._count || 0) <= rm0) throw new Error('M24: the rain matrices must be rewritten while raining');
+    setWeatherDebug('clear'); pump(60);
+    if (rainGrp.visible) throw new Error('M24: the rain must hide once the vis value decays');
+
+    // 4. profiler: off by default; active frames count, sections fill, HUD line rides showPerf
+    if (showPerf || perf.on) throw new Error('M24: the profiler must be off by default');
+    showPerf = true;
+    const f0 = perf.frames;
+    pump(5);
+    if (perf.frames - f0 !== 5) throw new Error('M24: perf.frames must count the active frames');
+    for (const k of ['stats', 'animE', 'sky', 'animL', 'plants', 'render'])
+      if (!(k in perf.avg)) throw new Error('M24: the profiler must measure the ' + k + ' section');
+    if (hudText.indexOf('drawcalls') < 0) throw new Error('M24: the HUD must show the perf line with drawcalls');
+    showPerf = false;
+    pump(1);
+    if (hudText.indexOf('drawcalls') >= 0) throw new Error('M24: the perf line must hide with showPerf');
+    if (perf.frames !== f0 + 5) throw new Error('M24: the profiler must stop counting while hidden');
+
+    // 5. house invariants: world-gen populations + registry untouched by the render pass
+    if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100)
+      throw new Error('M24: the static vegetation populations changed');
+    if (heightAt(0, 0) < 2) throw new Error('M24: the island heightfield changed');
+    if (crabs.length !== 15 || tigers.length !== 3 || gulls.length !== 5 ||
+        pelicans.length !== 3 || monkeys.length !== 5 || lizards.length !== 4 ||
+        snakes.length !== 6 || spiders.length !== 3)
+      throw new Error('M24: an animal population count changed');
+    if (sharks.length < 1) throw new Error('M24: the shark population changed');
+    if (animals.length !== 10) throw new Error('M24: the registry must still hold 10 species: ' + animals.length);
   }
 }
 `;
