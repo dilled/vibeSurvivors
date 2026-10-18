@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-18T02:07:46.397Z._
+_Auto-generated. Last updated 2026-10-18T02:40:02.299Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -20,6 +20,7 @@ _Auto-generated. Last updated 2026-10-18T02:07:46.397Z._
 - [m22-endless-mode](pages/m22-endless-mode.md) — category: decision | tags: [m22, endless, escalation, win] | M22 = endless mode + adaptation/escalating pressure (PLAN.md M22).
 - [m23-audio](pages/m23-audio.md) — category: decision | tags: [m23, audio, webaudio, determinism] | M23 = the audio pass (PLAN.md M23).
 - [m24-performance](pages/m24-performance.md) — category: decision | tags: [m24, performance, lod, instancing, rendering] | M24 = the performance pass (PLAN.md M24: "Stable target performance with full island systems active").
+- [m25-save-load](pages/m25-save-load.md) — category: decision | tags: [m25, save, load, localstorage, persistence] | M25 = save/load + respawn/recovery (PLAN.md M25: "Progress survives reload and failure states recover correctly").
 - [m3-camp-fence-light](pages/m3-camp-fence-light.md) — category: decision | tags: [camp, fence, torch, light] | ## What shipped (M3 — fence + camp light/fire integration)
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
 - [m5-tiger](pages/m5-tiger.md) — category: decision | tags: [tiger, night, predator, threat] | ## What shipped (M5 — first tiger)
