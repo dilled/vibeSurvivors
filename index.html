@@ -103,7 +103,7 @@
     <div class="row"><span>mute / unmute</span><b>P</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
   </div>
-  <div class="play">ANY KEY &mdash; WASH ASHORE</div>
+  <div class="play" id="playline">ANY KEY &mdash; WASH ASHORE</div>
 </div>
 <div id="hud"></div>
 <div id="hint">the island is unmapped &mdash; what you see is all there is</div>
@@ -721,7 +721,13 @@ window.addEventListener('keydown', (e) => {
     else if (e.code === 'KeyE' && !e.repeat) startEndless();   /* M22: stay on the island */
     return;
   }
-  if (!started && !won) { started = true; audioInit(); overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }   /* M23: first key unlocks audio (autoplay) */
+  if (!started && !won) {
+    started = true; audioInit(); overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800);   /* M23: first key unlocks audio (autoplay) */
+    if (bootSave) {   /* M25: a run exists on this device ‒ the first key continues it, N starts a new island */
+      if (e.code === 'KeyN') clearSave();
+      else { loadGame(); return; }   /* swallow the first key so it doesn't double-fire an action */
+    }
+  }
   if (e.repeat) return;   /* one shot per press for actions */
   if (e.code === 'Digit1') setClockP(0.02);
   if (e.code === 'Digit2') setClockP(0.33);
@@ -3184,6 +3190,7 @@ function actCamp() {
   cue('build');   /* M23 */
   learn('camp', 'you make your camp \u2014 flat dry ground, a flag, your place on the island');
   toast('\u26FA\uFE0F camp established \u2014 this is your ground');
+  saveGame();   /* M25 */
 }
 function actShelter() {
   if (dead) return;
@@ -3199,6 +3206,7 @@ function actShelter() {
   cue('build');   /* M23 */
   learn('shelter', 'shelter: a lean-to of palm leaf and driftwood \u2014 J');
   toast('\u26D3\uFE0F shelter built');
+  saveGame();   /* M25 */
 }
 function actBed() {
   if (dead) return;
@@ -3214,6 +3222,7 @@ function actBed() {
   cue('build');   /* M23 */
   learn('bed', 'bed: palm leaf on a driftwood frame \u2014 K');
   toast('\uD83D\uDECF\uFE0F bed made');
+  saveGame();   /* M25 */
 }
 function actFence() {
   if (dead) return;
@@ -3227,6 +3236,7 @@ function actFence() {
   cue('build');   /* M23 */
   learn('fence', 'fence: driftwood posts and rails around the camp \u2014 the gate faces where you were standing');
   toast('\uD83D\uDED7\uFE0F fence built \u2014 the camp has a perimeter');
+  saveGame();   /* M25 */
 }
 function actTorch() {
   if (dead) return;
@@ -3241,6 +3251,7 @@ function actTorch() {
   cue('build');   /* M23 */
   learn('torch', 'camp torch: a standing light for the camp \u2014 N \u2014 it burns all night');
   toast('\uD83D\uDD25 camp torch built \u2014 the camp is lit');
+  saveGame();   /* M25 */
 }
 /* sleep (M4): a lit bed at camp carries the night; the clock jumps to dawn */
 function sleepCheck() {
@@ -3314,6 +3325,7 @@ function actBuildRaft() {
   learn('raft', 'raft: lashed palm poles on outrigger floats \u2014 O \u2014 the way off this island');
   logLine('you lash a raft together', 'survival');
   toast('\u{1F6A3} raft built \u2014 the way off this island');
+  saveGame();   /* M25 */
 }
 /* M21: escape ‒ row the raft past the reef and the run is won. started=false
    freezes the whole sim (the existing gates) while the renderer keeps drawing. */
@@ -3321,6 +3333,7 @@ const WIN_R = ISLAND_R + 60;   /* past max shark reach (~260u), still on the 140
 function winEscape() {
   if (won) return;
   won = true;
+  clearSave();   /* M25: the run is finished ‒ a reload starts a fresh island */
   cue('win');   /* M23 */
   onRaft = false;
   started = false;
@@ -3371,6 +3384,7 @@ function startEndless() {
   learn('endless', 'endless mode: the island you survived adapts \u2014 fiercer tigers, bolder pelicans, shorter days, more storms');
   logLine('you stayed on the island \u2014 the run goes endless', 'survival');
   toast('\u{1F30A} endless mode \u2014 the island adapts to you');
+  saveGame();   /* M25 */
 }
 function eatCoconut() {
   if (dead) return;
@@ -3865,9 +3879,225 @@ function pt(name) {
   if (__w === 'clear' || __w === 'cloudy' || __w === 'rain' || __w === 'storm') setWeatherDebug(__w);
   if (__q.has('start')) {
     started = true;
-    overlay.style.display = 'none';
+    overlay.style.display = 'none';   /* M25: a saved run is continued by the save/load boot block after the section */
   }
   if (__q.has('map')) toggleMap();   /* M18: debug ‒ open the paper map at load */
+}
+
+/* ---- save/load (M25) ---- */
+/* Single-player run persistence: ONE localStorage JSON snapshot, written at
+   camp/build events and once per dusk/dawn crossing; a reload offers to
+   continue the run. The island layout is deterministic from SEED, so only
+   progress state is snapshotted (JSON-serializable fields only ‒ THREE nodes
+   are rebuilt, never stored). Zero rng()/Math.random in this section: storm
+   events are re-derived on their private per-seg streams, and the weather
+   stream is resynced by replaying its exact draw count. */
+const SAVE_KEY = 'vibesurvivors.save.v1';
+function storageOk() {
+  try { return typeof localStorage !== 'undefined'; } catch { return false; }
+}
+function readSave() {
+  if (!storageOk()) return null;
+  let raw = null;
+  try { raw = localStorage.getItem(SAVE_KEY); } catch { return null; }
+  if (!raw) return null;
+  let s = null;
+  try { s = JSON.parse(raw); } catch { clearSave(); return null; }
+  if (!validateSave(s)) { clearSave(); return null; }   /* corrupted/range-bad ‒ discard to fresh island */
+  return s;
+}
+function hasSave() { return readSave() !== null; }
+function clearSave() {
+  if (!storageOk()) return;
+  try { localStorage.removeItem(SAVE_KEY); } catch {}
+}
+function saveGame() {
+  if (dead || won) return;   /* never snapshot a terminal state */
+  if (!storageOk()) return;
+  const campS = camp ? {
+    x: camp.x, z: camp.z, g: camp.g, rot: camp.rot,
+    structures: {
+      shelter: !!camp.structures.shelter,
+      bed: !!camp.structures.bed,
+      fence: !!camp.structures.fence,
+      torch: !!camp.structures.torch,
+      raft: camp.structures.raft ? [camp.structures.raft.position.x, camp.structures.raft.position.z] : false,
+    },
+  } : null;
+  const s = {
+    v: 1,
+    p0, gameMin,
+    pos: [rig.position.x, rig.position.y, rig.position.z, rig.rotation.y],
+    stats: { thirst: stats.thirst, hunger: stats.hunger, health: stats.health, wet: stats.wet },
+    inv: { ...INV },
+    spear, endless, endlessStartDay, endlessStartMin,
+    poisonDrain, infectedWound, lastMeal, firstNight,
+    journal: [...journal],
+    learned: [...learned],
+    mapVisited: [...mapVisited].filter(Boolean),
+    mapKnown: [...mapKnown],
+    camp: campS,
+    fires: fires.map((f) => ({ x: f.x, g: f.g, z: f.z, phase: f.phase, cooking: f.cooking })),
+    items: items.filter((it) => !it.taken).map((it) => ({ x: it.x, y: it.y, z: it.z, vy: it.vy, state: it.state })),
+    palms: palms.map((p) => p.cocos),
+    nest: gullNest.eggs,
+    plants: plants
+      .filter((p) => p.state !== 'ready' || p.min !== 0 || p.chargesLeft !== PLANT_TYPES[p.type].charges || (p.wear || 1) !== 1)
+      .map((p) => ({ i: p.idx, s: p.state, m: p.min, c: p.chargesLeft, w: p.wear || 1 })),
+    weather: { segs: weather.segs.map((sg) => ({ s: sg.state, a: sg.start, b: sg.end })) },
+  };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(s)); } catch {}
+}
+function validateSave(s) {
+  if (!s || typeof s !== 'object' || s.v !== 1) return false;
+  const fin = (v) => typeof v === 'number' && isFinite(v);
+  if (!fin(s.p0) || s.p0 < 0 || s.p0 >= 1) return false;
+  if (!fin(s.gameMin) || s.gameMin < 0) return false;
+  if (!Array.isArray(s.pos) || s.pos.length !== 4 || s.pos.some((v) => !fin(v))) return false;
+  const st = s.stats;
+  if (!st || ['thirst', 'hunger', 'health', 'wet'].some((k) => !fin(st[k]) || st[k] < 0 || st[k] > 100)) return false;
+  if (!s.inv || typeof s.inv !== 'object') return false;
+  for (const k of Object.keys(INV)) if (typeof s.inv[k] !== 'number' || s.inv[k] < 0 || s.inv[k] % 1 !== 0) return false;
+  if (typeof s.spear !== 'boolean' || typeof s.endless !== 'boolean') return false;
+  if (!Array.isArray(s.journal) || s.journal.some((e) => !e || typeof e.msg !== 'string')) return false;
+  if (!Array.isArray(s.learned) || s.learned.some((k) => typeof k !== 'string')) return false;
+  if (!Array.isArray(s.palms) || s.palms.length !== palms.length ||
+      s.palms.some((c) => typeof c !== 'number' || c % 1 !== 0 || c < 0 || c > 2)) return false;
+  if (!Array.isArray(s.plants) || s.plants.some((e) => !e || typeof e.i !== 'number' || e.i < 0 ||
+      e.i >= plants.length || !['ready', 'growing', 'depleted'].includes(e.s) || !fin(e.m) || e.m < 0 ||
+      typeof e.c !== 'number' || e.c < 0)) return false;
+  if (!Array.isArray(s.mapVisited) || s.mapVisited.some((i) => typeof i !== 'number' || i < 0 || i >= MAP_N * MAP_N)) return false;
+  if (!Array.isArray(s.mapKnown) || s.mapKnown.some((k) => typeof k !== 'string')) return false;
+  if (s.camp !== null) {
+    const c = s.camp;
+    if (!c || !fin(c.x) || !fin(c.z) || !fin(c.g) || !fin(c.rot) || !c.structures) return false;
+    for (const k of ['shelter', 'bed', 'fence', 'torch']) if (typeof c.structures[k] !== 'boolean') return false;
+    if (c.structures.raft !== false && (!Array.isArray(c.structures.raft) || c.structures.raft.length !== 2 ||
+        c.structures.raft.some((v) => !fin(v)))) return false;
+  }
+  if (!Array.isArray(s.fires) || s.fires.some((f) => !f || !fin(f.x) || !fin(f.g) || !fin(f.z) || !fin(f.phase))) return false;
+  if (!Array.isArray(s.items) || s.items.some((it) => !it || !fin(it.x) || !fin(it.y) || !fin(it.z) || !fin(it.vy) ||
+      (it.state !== 'fall' && it.state !== 'ground'))) return false;
+  if (typeof s.nest !== 'number' || s.nest % 1 !== 0 || s.nest < 0 || s.nest > NEST_EGGS) return false;
+  if (!s.weather || !Array.isArray(s.weather.segs) || s.weather.segs.length === 0 ||
+      s.weather.segs.some((sg) => !WEATHER_STATES.includes(sg.s) || !fin(sg.a) || !fin(sg.b) || sg.b <= sg.a)) return false;
+  return true;
+}
+function loadGame(sv) {
+  sv = sv || readSave();
+  if (!sv) return false;
+  /* time + player */
+  p0 = sv.p0; gameMin = sv.gameMin; plantClock = sv.gameMin;   /* plants never fast-forward on load */
+  stats.thirst = sv.stats.thirst; stats.hunger = sv.stats.hunger;
+  stats.health = sv.stats.health; stats.wet = sv.stats.wet;
+  for (const k of Object.keys(INV)) INV[k] = sv.inv[k];
+  spear = sv.spear; spearMesh.visible = spear;
+  endless = sv.endless; endlessStartDay = sv.endlessStartDay || 0; endlessStartMin = sv.endlessStartMin || 0;
+  poisonDrain = sv.poisonDrain || null; infectedWound = !!sv.infectedWound;
+  lastMeal = { hunger: sv.lastMeal ? sv.lastMeal.hunger : 0, thirst: sv.lastMeal ? sv.lastMeal.thirst : 0 };
+  firstNight = !!sv.firstNight;
+  dead = false; onRaft = false; won = false; started = true;
+  deadEl.style.display = 'none'; wonEl.style.display = 'none';
+  journal.length = 0; journal.push(...sv.journal);
+  learned.clear(); for (const k of sv.learned) learned.add(k);
+  mapVisited.fill(0); for (const i of sv.mapVisited) mapVisited[i] = 1;
+  mapKnown.clear(); for (const k of sv.mapKnown) mapKnown.add(k);
+  rig.position.set(sv.pos[0], sv.pos[1], sv.pos[2]);
+  rig.rotation.y = sv.pos[3];
+  /* camp + structures: tear down any live camp, rebuild the saved one */
+  if (camp) {
+    scene.remove(camp.grp);
+    for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (camp.structures[k]) scene.remove(camp.structures[k]);
+    camp = null;
+  }
+  if (sv.camp) {
+    makeCamp(sv.camp.x, sv.camp.z);
+    camp.rot = sv.camp.rot;
+    const S = sv.camp.structures;
+    if (S.shelter) { const o = campOffsets('shelter'); camp.structures.shelter = buildShelterMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z)); }
+    if (S.bed) { const o = campOffsets('bed'); camp.structures.bed = buildBedMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z)); }
+    if (S.fence) camp.structures.fence = buildFenceMesh(camp.x, camp.z, camp.rot);
+    if (S.torch) { const o = campOffsets('torch'); camp.structures.torch = buildTorchMesh(o.x, heightAt(o.x, o.z), o.z); }
+    if (S.raft) {
+      const o = campOffsets('raft');
+      camp.structures.raft = buildRaftMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z));
+      camp.structures.raft.position.set(S.raft[0], camp.structures.raft.position.y, S.raft[1]);   /* the raft can be rowed far from camp */
+    }
+  }
+  /* fires + ground items: data-only round-trip, meshes rebuilt */
+  for (const f of fires) scene.remove(f.grp); fires.length = 0;
+  for (const f of sv.fires) {
+    makeFire(f.x, f.g, f.z);
+    const lf = fires[fires.length - 1];
+    lf.phase = f.phase; lf.cooking = f.cooking || null;   /* the fresh random phase is pre-existing + cosmetic, overwritten */
+  }
+  for (const it of items) scene.remove(it.mesh); items.length = 0;
+  for (const it of sv.items) {
+    const mesh = new THREE.Mesh(itemGeo, itemMat);
+    mesh.position.set(it.x, it.y, it.z);
+    scene.add(mesh);
+    items.push({ x: it.x, y: it.y, z: it.z, vy: it.vy, state: it.state, mesh, taken: false });
+  }
+  /* palm coconuts: restore counts + the per-crown crown instances (2/palm) */
+  for (let i = 0; i < palms.length; i++) {
+    const p = palms[i];
+    p.cocos = sv.palms[i];
+    for (let j = 0; j < 2; j++) {
+      if (j < p.cocos) {
+        if (j === 0) setM(p.idx * 2, cocosMesh, p.top[0] + 0.18, p.top[1] - 0.18, p.top[2] + 0.1, 0, 0, 0, 1, 1, 1);
+        else setM(p.idx * 2 + 1, cocosMesh, p.top[0] - 0.15, p.top[1] - 0.18, p.top[2] - 0.14, 0, 0, 0, 1, 1, 1);
+      } else setM(p.idx * 2 + j, cocosMesh, 9999, -99, 9999, 0, 0, 0, 0, 0, 0);
+    }
+  }
+  /* gull nest eggs */
+  gullNest.eggs = sv.nest;
+  for (let i = 0; i < gullNest.eggMeshes.length; i++) gullNest.eggMeshes[i].visible = i < sv.nest;
+  /* plants: only the non-default spots are stored */
+  for (const e of sv.plants) {
+    const p = plants[e.i];
+    p.state = e.s; p.min = e.m; p.chargesLeft = e.c; p.wear = e.w || 1;
+    emitPlant(p);
+  }
+  /* weather: restore the segment list; a storm's events are re-derived on the
+     same private stream the generator uses (fixed draw order, done=false),
+     then the shared stream is resynced by replaying its exact draw count
+     (initial seg = 1 draw; each extended seg = pick + dur = 2). */
+  weather.segs.length = 0;
+  for (let i = 0; i < sv.weather.segs.length; i++) {
+    const sg = sv.weather.segs[i];
+    const seg = { state: sg.s, start: sg.a, end: sg.b, evs: [] };
+    if (seg.state === 'storm') {
+      const evR = mulberry32(SEED + WEATHER_SEED_EVENTS + i * 7);
+      const nS = 1 + Math.floor(evR() * 3);
+      for (let k = 0; k < nS; k++) {
+        const t = seg.start + evR() * (seg.end - seg.start);
+        const a = evR() * Math.PI * 2;
+        const r = Math.sqrt(evR()) * ISLAND_R * 0.7;
+        seg.evs.push({ kind: 'strike', t, x: Math.cos(a) * r, z: Math.sin(a) * r });
+      }
+      const nD = 1 + Math.floor(evR() * 2);
+      for (let k = 0; k < nD; k++)
+        seg.evs.push({ kind: 'drop', t: seg.start + evR() * (seg.end - seg.start), pi: Math.floor(evR() * palms.length) });
+      seg.evs.sort((u, v) => u.t - v.t);
+      for (const ev of seg.evs) ev.done = false;
+    }
+    weather.segs.push(seg);
+  }
+  weatherRng = mulberry32(SEED + WEATHER_SEED_OFFSET);
+  for (let k = 0; k < 1 + 2 * (weather.segs.length - 1); k++) weatherRng();
+  return true;
+}
+/* boot: offer to continue a run found on this device; ?start=1 continues it
+   without the title card (fresh island when no save exists). */
+let bootSave = null;
+{
+  bootSave = readSave();
+  const playEl = document.getElementById('playline');
+  if (bootSave && playEl) {
+    const day = Math.floor((bootSave.p0 * 1800 + bootSave.gameMin) / 1800) + 1;
+    playEl.innerHTML = 'ANY KEY &mdash; CONTINUE &mdash; DAY ' + day + '   (&nbsp;N &mdash; NEW ISLAND&nbsp;)';
+  }
+  if ((new URLSearchParams(location.search)).has('start') && bootSave) loadGame(bootSave);
 }
 function clockFromP(p) {
   if (p < DAY_FRAC) return 6 + 12 * (p / DAY_FRAC);
@@ -4189,6 +4419,7 @@ function frame(t) {
   if (started && !dead) {
     const pNow = (p0 + gameMin / 1800) % 1;
     gameMin += dt * timeRate(pNow);   /* M22: 12h day = 20 real min, 12h night = 10; endless days run faster */
+    if ((pNow < DAY_FRAC) !== (((p0 + gameMin / 1800) % 1) < DAY_FRAC)) saveGame();   /* M25: save once per dusk/dawn crossing */
     stats.thirst = Math.max(0, stats.thirst - THIRST_RATE * dt);
     stats.hunger = Math.max(0, stats.hunger - HUNGER_RATE * dt);
     /* M11: rain/storm soaks you unless shelter or a nearby fire dries you */

@@ -36,6 +36,16 @@ globalThis.addEventListener = () => {};
 globalThis.removeEventListener = () => {};
 globalThis.window = globalThis;
 globalThis.location = { search: '', href: 'http://localhost/', reload: () => {} };
+/* M25: in-memory localStorage stub (the game guards all access with storageOk + try/catch) */
+{
+  const __ls = {};
+  globalThis.localStorage = {
+    getItem: (k) => (Object.prototype.hasOwnProperty.call(__ls, k) ? __ls[k] : null),
+    setItem: (k, v) => { __ls[k] = String(v); },
+    removeItem: (k) => { delete __ls[k]; },
+    clear: () => { for (const k of Object.keys(__ls)) delete __ls[k]; },
+  };
+}
 globalThis.__rafCb = null;
 globalThis.requestAnimationFrame = (cb) => { globalThis.__rafCb = cb; return 1; };
 globalThis.__audioTime = 0;   // M23: stub AudioContext clock, advanced by the pumps
@@ -2609,6 +2619,188 @@ patched += `
       throw new Error('M24: an animal population count changed');
     if (sharks.length < 1) throw new Error('M24: the shark population changed');
     if (animals.length !== 10) throw new Error('M24: the registry must still hold 10 species: ' + animals.length);
+  }
+
+  /* ---- M25: save/load + respawn/recovery ---- */
+  {
+    const ls = globalThis.localStorage;
+    ls.removeItem(SAVE_KEY);
+
+    /* earlier blocks left a camp + fires behind; clear them for a known state */
+    if (camp) {
+      scene.remove(camp.grp);
+      for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (camp.structures[k]) scene.remove(camp.structures[k]);
+      camp = null;
+    }
+    for (const f of fires) scene.remove(f.grp); fires.length = 0;
+    for (const it of items) scene.remove(it.mesh); items.length = 0;
+
+    // 0. fresh boot: no save, title line untouched
+    if (hasSave()) throw new Error('M25: no save must exist on a fresh boot');
+    if ((document.getElementById('playline').innerHTML || '').includes('CONTINUE'))
+      throw new Error('M25: the title line must not offer to continue without a save');
+
+    // 1. camp + structure events write a well-shaped save
+    const px = rig.position.x, pz = rig.position.z;
+    makeCamp(px, pz);
+    actShelter();
+    const pre = JSON.parse(ls.getItem(SAVE_KEY));
+    if (!pre || pre.v !== 1) throw new Error('M25: a camp build must write a v1 save');
+    if (!pre.camp || pre.camp.structures.shelter !== true)
+      throw new Error('M25: the save must carry the camp + shelter state');
+    if (!Array.isArray(pre.journal) || !Array.isArray(pre.learned) || !Array.isArray(pre.mapKnown))
+      throw new Error('M25: the save must carry journal/learned/mapKnown');
+    if (!Array.isArray(pre.palms) || pre.palms.length !== palms.length)
+      throw new Error('M25: the save must carry one coco count per palm');
+    if (!pre.weather || pre.weather.segs.length !== weather.segs.length)
+      throw new Error('M25: the save must carry the full weather segment list');
+
+    // 2. the dusk crossing saves exactly once; phase-stable frames do not re-save
+    setClockP(0.1);
+    gameMin = 1800 * (2 / 3 - 0.1) - 0.2;   /* 0.2 game min before dusk (~20 frames at day rate) */
+    saveGame();   /* re-baseline at the rewound clock so the crossing save is provably newer */
+    const rawDay = ls.getItem(SAVE_KEY);
+    pump(25);   /* crosses the DAY_FRAC boundary (~0.01 game min/frame) and settles into night */
+    if (((p0 + gameMin / 1800) % 1) < 2 / 3) throw new Error('M25: the pump must have crossed into night');
+    const rawNight = ls.getItem(SAVE_KEY);
+    if (rawNight === rawDay) throw new Error('M25: the dusk crossing must write a save');
+    const nightSave = JSON.parse(rawNight);
+    if (!(nightSave.gameMin > JSON.parse(rawDay).gameMin)) throw new Error('M25: the crossing save must be newer');
+    pump(3);   /* night, phase-stable */
+    if (ls.getItem(SAVE_KEY) !== rawNight) throw new Error('M25: stable-phase frames must not re-save');
+
+    // 3. round-trip: mutate live state, save, scramble the live state, load, assert restored
+    stats.thirst = 42; stats.hunger = 33; stats.health = 57; stats.wet = 12;
+    INV.wood = 5; INV.fiber = 3; INV.coconut = 2;
+    spear = true;
+    rig.position.set(12.5, 3, -7.5); rig.rotation.y = 1.1;
+    const pp = plants[0];
+    pp.state = 'depleted'; pp.min = 500; pp.chargesLeft = 0; pp.wear = 2;
+    palms[0].cocos = 1;
+    makeFire(10, heightAt(10, 15), 15);
+    fires[0].phase = 4.5; fires[0].cooking = 'fishRaw';
+    const im = new THREE.Mesh(itemGeo, itemMat);
+    scene.add(im);
+    items.push({ x: 2, y: 1, z: 3, vy: -1, state: 'fall', mesh: im, taken: false });
+    gullNest.eggs = 2;
+    logLine('m25 roundtrip marker', 'survival');
+    learned.add('m25test');
+    mapKnown.add('m25spot');
+    saveGame();
+    const goodRaw = ls.getItem(SAVE_KEY);
+    stats.thirst = 1; stats.health = 99;
+    gameMin += 5000; p0 = 0.5;
+    scene.remove(camp.grp);
+    for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (camp.structures[k]) scene.remove(camp.structures[k]);
+    camp = null;
+    for (const f of fires) scene.remove(f.grp); fires.length = 0;
+    for (const it of items) scene.remove(it.mesh); items.length = 0;
+    palms[0].cocos = 2;
+    gullNest.eggs = 3;
+    pp.state = 'ready'; pp.min = 0; pp.chargesLeft = 4; pp.wear = 1;
+    journal.length = 0; learned.clear(); mapKnown.clear();
+    spear = false; INV.wood = 0;
+    rig.position.set(0, 0, 0); rig.rotation.y = 0;
+    if (!loadGame()) throw new Error('M25: loadGame must restore the valid save');
+    if (Math.abs(stats.thirst - 42) > 1e-9 || Math.abs(stats.hunger - 33) > 1e-9 ||
+        Math.abs(stats.health - 57) > 1e-9 || Math.abs(stats.wet - 12) > 1e-9)
+      throw new Error('M25: the stats must round-trip');
+    if (INV.wood !== 5 || INV.fiber !== 3 || INV.coconut !== 2 || spear !== true)
+      throw new Error('M25: the inventory + spear must round-trip');
+    if (Math.abs(rig.position.x - 12.5) > 1e-9 || Math.abs(rig.position.z + 7.5) > 1e-9 ||
+        Math.abs(rig.rotation.y - 1.1) > 1e-9)
+      throw new Error('M25: the player position must round-trip');
+    if (pp.state !== 'depleted' || Math.abs(pp.min - 500) > 1e-9 || pp.chargesLeft !== 0 || pp.wear !== 2)
+      throw new Error('M25: the non-default plant state must round-trip');
+    if (plantClock !== gameMin) throw new Error('M25: plantClock must equal the loaded gameMin (no fast-forward)');
+    const before = { s: pp.state, m: pp.min };
+    updatePlants(); updatePlants();
+    if (pp.state !== before.s || Math.abs(pp.min - before.m) > 1e-9)
+      throw new Error('M25: plants must not double-grow right after a load');
+    if (palms[0].cocos !== 1) throw new Error('M25: the palm coco count must round-trip');
+    if (!camp || !camp.structures.shelter)
+      throw new Error('M25: the camp + shelter must be rebuilt on load');
+    if (Math.abs(camp.x - px) > 1e-9 || Math.abs(camp.z - pz) > 1e-9)
+      throw new Error('M25: the camp position must round-trip');
+    if (fires.length !== 1 || Math.abs(fires[0].phase - 4.5) > 1e-9 || fires[0].cooking !== 'fishRaw')
+      throw new Error('M25: the fire data must round-trip');
+    if (items.length !== 1 || items[0].state !== 'fall' || !items[0].mesh)
+      throw new Error('M25: the ground item must be rebuilt with a fresh mesh');
+    if (gullNest.eggs !== 2 || gullNest.eggMeshes[1].visible !== true || gullNest.eggMeshes[2].visible !== false)
+      throw new Error('M25: the gull nest eggs must round-trip');
+    if (!journal.some((e) => e.msg === 'm25 roundtrip marker') || !learned.has('m25test') || !mapKnown.has('m25spot'))
+      throw new Error('M25: the journal/learned/map knowledge must survive the round-trip');
+    if (JSON.stringify(weather.segs.map((s) => [s.state, s.start, s.end])) !==
+        JSON.stringify(JSON.parse(goodRaw).weather.segs.map((s) => [s.s, s.a, s.b])))
+      throw new Error('M25: the weather segments must round-trip');
+    if (weather.segs.some((s) => s.state === 'storm' && s.evs.some((ev) => ev.done !== false)))
+      throw new Error('M25: restored storm events must be re-derived with done=false');
+
+    // 4. weather stream alignment: the next generated seg must match a fresh reference stream
+    const nSegs = weather.segs.length;
+    const refR = mulberry32(SEED + WEATHER_SEED_OFFSET);
+    for (let k = 0; k < 1 + 2 * (nSegs - 1); k++) refR();   /* initial seg = 1 draw, each extended = 2 */
+    const lastSeg = weather.segs[nSegs - 1];
+    const opts = WEATHER_NEXT[lastSeg.state];
+    const rr = refR();
+    let acc = 0, refSt = null;
+    for (const [st, w] of opts) { acc += w; if (rr < acc) { refSt = st; break; } }
+    if (!refSt) refSt = opts[opts.length - 1][0];
+    const [mn, mx] = WEATHER_DUR[refSt];
+    const refEnd = lastSeg.end + mn + refR() * (mx - mn);
+    weatherExtend(lastSeg.end + 10);   /* every seg lasts >= 45 game min, so exactly one extends */
+    const nextSeg = weather.segs[weather.segs.length - 1];
+    if (nextSeg.state !== refSt || Math.abs(nextSeg.start - lastSeg.end) > 1e-9 ||
+        Math.abs(nextSeg.end - refEnd) > 1e-9)
+      throw new Error('M25: the weather stream must be resynced on load (a desync would corrupt future weather)');
+
+    // 5. corrupted / malformed / range-bad saves are discarded to a fresh island
+    ls.setItem(SAVE_KEY, '{this is not json');
+    if (readSave() !== null) throw new Error('M25: malformed JSON must be discarded');
+    if (ls.getItem(SAVE_KEY) !== null) throw new Error('M25: a malformed save must be deleted');
+    const bad = JSON.parse(goodRaw);
+    bad.gameMin = -5;
+    ls.setItem(SAVE_KEY, JSON.stringify(bad));
+    if (readSave() !== null) throw new Error('M25: a range-bad save (gameMin < 0) must be discarded');
+    const bad2 = JSON.parse(goodRaw);
+    bad2.stats.thirst = 150;
+    ls.setItem(SAVE_KEY, JSON.stringify(bad2));
+    if (readSave() !== null) throw new Error('M25: an out-of-range stat must be discarded');
+    const bad3 = JSON.parse(goodRaw);
+    bad3.palms.pop();
+    ls.setItem(SAVE_KEY, JSON.stringify(bad3));
+    if (readSave() !== null) throw new Error('M25: a save whose palm list mismatches the world must be discarded');
+    ls.setItem(SAVE_KEY, goodRaw);
+    if (readSave() === null) throw new Error('M25: a good save must still validate after the corrupt probes');
+
+    // 6. death -> respawn recovery
+    stats.health = 0;
+    checkDeath();
+    if (!dead) throw new Error('M25: zero health must kill the player');
+    const rawAtDeath = ls.getItem(SAVE_KEY);
+    saveGame();   /* never snapshots a dead state */
+    if (ls.getItem(SAVE_KEY) !== rawAtDeath) throw new Error('M25: saveGame must be a no-op while dead');
+    respawn();
+    if (dead || stats.health !== 100 || stats.thirst !== 100 || stats.hunger !== 100)
+      throw new Error('M25: respawn must restore to full vitals');
+    if (INV.wood !== 0 || INV.rope !== 0 || INV.coconut !== 0)
+      throw new Error('M25: respawn must clear carried loot (fiber stays, per the pre-M25 respawn contract)');
+    if (Math.abs(rig.position.x - camp.x) > 1e-9 || Math.abs(rig.position.z - camp.z) > 1e-9)
+      throw new Error('M25: respawn must wake the player at the camp');
+    saveGame();   /* and the run is savable again after the recovery */
+    const postRes = JSON.parse(ls.getItem(SAVE_KEY));
+    if (!(postRes.gameMin > 0) || postRes.stats.health !== 100) throw new Error('M25: the post-respawn save must be valid');
+
+    // 7. house invariants: the persistence work left the world intact
+    if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100)
+      throw new Error('M25: the static vegetation populations changed');
+    if (heightAt(0, 0) < 2) throw new Error('M25: the island heightfield changed');
+    if (crabs.length !== 15 || tigers.length !== 3 || gulls.length !== 5 ||
+        pelicans.length !== 3 || monkeys.length !== 5 || lizards.length !== 4 ||
+        snakes.length !== 6 || spiders.length !== 3)
+      throw new Error('M25: an animal population count changed');
+    if (sharks.length < 1) throw new Error('M25: the shark population changed');
+    if (animals.length !== 10) throw new Error('M25: the registry must still hold 10 species');
   }
 }
 `;
