@@ -100,6 +100,7 @@
     <div class="row"><span>sleep until dawn</span><b>Z</b></div>
     <div class="row"><span>paper map</span><b>Y</b></div>
     <div class="row"><span>field journal</span><b>I</b></div>
+    <div class="row"><span>mute / unmute</span><b>P</b></div>
     <div class="row"><span>respawn</span><b>R</b></div>
   </div>
   <div class="play">ANY KEY &mdash; WASH ASHORE</div>
@@ -698,7 +699,7 @@ window.addEventListener('keydown', (e) => {
     else if (e.code === 'KeyE' && !e.repeat) startEndless();   /* M22: stay on the island */
     return;
   }
-  if (!started && !won) { started = true; overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }
+  if (!started && !won) { started = true; audioInit(); overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800); }   /* M23: first key unlocks audio (autoplay) */
   if (e.repeat) return;   /* one shot per press for actions */
   if (e.code === 'Digit1') setClockP(0.02);
   if (e.code === 'Digit2') setClockP(0.33);
@@ -731,6 +732,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyI') toggleJournal();   /* M19: open/close the field journal */
   if (e.code === 'KeyU') actCraftRope();   /* M20: twist rope from fiber */
   if (e.code === 'KeyO') actBuildRaft();   /* M20: build the raft at camp */
+  if (e.code === 'KeyP') toggleMute();   /* M23: mute / unmute */
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -815,7 +817,7 @@ function toast(msg) {
   el.__t = setTimeout(() => { el.style.opacity = '0'; }, 4200);
 }
 function learn(key, msg) {
-  if (!learned.has(key)) { learned.add(key); journal.push({ cat: catOf(key), msg, day: dayOf() }); toast('\u{1F4D3} ' + msg); }
+  if (!learned.has(key)) { learned.add(key); journal.push({ cat: catOf(key), msg, day: dayOf() }); toast('\u{1F4D3} ' + msg); cue('learn'); }   /* M23: first-time blip (deduped above) */
 }
 
 /* ---- items on the ground (falling / dropped coconuts) ---- */
@@ -922,7 +924,8 @@ function updateSchools(dt) {
     /* M16: a 'scream' alarm scatters the school ‒ the same visual-displacement
        pattern as the M11 surge (push 6u, no re-clamp; it wanders home after) */
     const al = alarmsNear(s.x, s.z, ['scream']);
-    if (al) { s.scT = 3; s.scX = al.x; s.scZ = al.z; }
+    if (al) { if (s.scT <= 0) cue('fish', s.x, s.z);   /* M23: scatter plop (once per alarm) */
+      s.scT = 3; s.scX = al.x; s.scZ = al.z; }
     if (s.scT > 0) {
       s.scT -= dt;
       if (!learned.has('fishscatter'))
@@ -995,6 +998,7 @@ function updateCrabs(dt) {
       for (const l of lizards) {
         const dl = Math.hypot(l.x - c.x, l.z - c.z);
         if (dl < CRAB_HIDE_R) {
+          if (c.fleeT <= 0) cue('crab', c.x, c.z);   /* M23: scuttle tell */
           c.fleeT = 2;
           c.dir = Math.atan2(c.x - l.x, c.z - l.z);
           learn('crabhide', 'crabs scuttle into the sand when a big lizard is hunting nearby');
@@ -1221,6 +1225,7 @@ function updateTigers(dt) {
           learn('tiger', 'tigers hunt at night \u2014 fire and torchlight drive them off');
           toast('\u{1F981} the tiger strikes \u2014 you drop what you carry');
           alarmRaise('attack', t.x, t.z, 20, 6);   /* M16: a tiger strike rings the beach */
+          cue('tiger', t.x, t.z);   /* M23: the roar */
           checkDeath();
         }
       }
@@ -1361,6 +1366,7 @@ function updateGulls(dt) {
       } else if (gullDiveCd <= 0 && Math.hypot(px - gu.x, pz - gu.z) < GULL_DIVE_R) {
         gu.diveTell = GULL_DIVE_TELL;
         alarmRaise('scream', gu.x, gu.z, 15, GULL_DIVE_TELL);   /* M16: the dive tell rings the beach */
+        cue('gull', gu.x, gu.z);   /* M23: 3 cries across the 3 s tell */
         toast('gulls are screaming overhead \u2014 they dive at heads');
       }
       /* water scare: while the player is in the water the flock drifts
@@ -1450,6 +1456,10 @@ function updateAnimals(dt, phase) {
 const alarms = [];   /* {kind, x, z, r, t} */
 function alarmRaise(kind, x, z, r, t) {
   alarms.push({ kind, x, z, r, t });
+  /* M23: soft species-agnostic backstop cue (the per-species signature plays on top) */
+  if (kind === 'scream') cue('alarm2', x, z);
+  else if (kind === 'attack') cue('thud', x, z);
+  else if (kind === 'alert') cue('alarm', x, z);
 }
 /* strongest/nearest active alarm covering (x, z); kinds = array or undefined for any */
 function alarmsNear(x, z, kinds) {
@@ -1588,6 +1598,7 @@ function updateMonkeys(dt) {
           if (Math.hypot(t.x - m.hx, t.z - m.hz) < MONKEY_SCARE_R) {
             m.screamT = MONKEY_SCARE_T;
             alarmRaise('scream', m.x, m.z, 20, MONKEY_SCARE_T);   /* M16: the shriek rings the alarm bus */
+            cue('monkey', m.x, m.z);   /* M23: the shriek */
             toast('\u{1F435}\u{1F435}\u{1F435} the monkeys are shrieking \u2014 a tiger is near');
             learn('monkeyscream', 'shrieking monkeys mean a tiger is close \u2014 back off and keep your fire lit');
             break;
@@ -1757,7 +1768,7 @@ function updateLizards(dt) {
         }
       if (cNear.d < LIZ_CRAB_R && l.burstCd <= 0) {
         /* tide-line crab: burst faster than a walking player for 3 s */
-        if (l.burstT <= 0) l.burstT = LIZ_BURST_T;
+        if (l.burstT <= 0) { l.burstT = LIZ_BURST_T; cue('lizard', l.x, l.z); }   /* M23: sprint whoosh */
         dir = Math.atan2(cNear.c.x - l.x, cNear.c.z - l.z);
         speed = l.burstT > 0 ? LIZ_BURST : LIZ_SPEED;
         if (cNear.d < LIZ_CRAB_CATCH_R) {
@@ -1874,7 +1885,7 @@ function updateSnakes(dt) {
       } else if (s.freezeT > 0) {
         speed = 0;   /* M11-style panic: the snake freezes, coiled */
       } else if (dp < SNAKE_STRIKE_STEP_R && s.strikeCd <= 0) {
-        s.tellT = SNAKE_TELL_T;   /* stepped on it ‒ takes priority over the slither */
+        if (s.tellT <= 0) { s.tellT = SNAKE_TELL_T; cue('snake', s.x, s.z); }   /* M23: the hiss; stepped on it ‒ takes priority over the slither */
       } else if (dp < SNAKE_FLEE_R) {
         /* slither away; if the escape is terrain-vetoed and you are on top
            of it (cornered), it strikes instead of taking the step */
@@ -1883,6 +1894,7 @@ function updateSnakes(dt) {
         const nx = s.x + Math.sin(dir) * speed * dt;
         const nz = s.z + Math.cos(dir) * speed * dt;
         if (heightAt(nx, nz) < 0.5 && dp < SNAKE_STRIKE_CORNER_R && s.strikeCd <= 0) {
+          if (s.tellT <= 0) cue('snake', s.x, s.z);   /* M23: the hiss */
           s.tellT = SNAKE_TELL_T;
           speed = 0;
         }
@@ -2089,6 +2101,7 @@ function updatePelicans(dt) {
         p.stealT = 0;
         p.stealCd = PELICAN_STEAL_CD / (1 + pb);   /* M22 */
         p.fleeT = 2; p.fleeX = px; p.fleeZ = pz;
+        cue('pelicanwin', p.x, p.z);   /* M23: flaps off */
         learn('pelicansteal', 'a pelican hovers over a fish in your hand \u2014 Space keeps it');
         toast('\u{1F985} the pelican flaps off empty-handed');
       } else if (p.stealT <= 0) {
@@ -2113,6 +2126,7 @@ function updatePelicans(dt) {
         speed = d > 1 ? PELICAN_SPEED : 0;
         alt = d > 4 ? py + 3 : Math.max(WATER - 0.2, py + 3 - d);   /* swoop onto the water */
         if (d <= 1.2) {
+          cue('splash', target.x, target.z);   /* M23: the deep-dive splash */
           target.n--; target.mesh.count = target.n;
           p.diveCd = PELICAN_DIVE_CD;
           pelicanFishX = target.x; pelicanFishZ = target.z; pelicanFishT = 4;   /* the gulls mob it */
@@ -2129,6 +2143,7 @@ function updatePelicans(dt) {
       /* hand steal: a raw fish in hand, the player close, the CD clear */
       if (p.stealCd <= 0 && INV.fishRaw > 0 && Math.hypot(px - p.x, pz - p.z) < PELICAN_STEAL_R * (1 + 0.5 * pb)) {
         p.stealT = PELICAN_STEAL_T / (1 + pb);   /* M22: bolder pelicans steal faster */
+        cue('pelican', p.x, p.z);   /* M23: heavy-flap telegraph */
         toast('a pelican hovers over your hand \u2014 SPACE keeps the fish');
       }
     }
@@ -2236,7 +2251,7 @@ function updateSharks(dt) {
        water, the cooldown clear. 0.7 s lunge telegraph, then damage. */
     if (s.state === 'curious' && inWater && s.atkCd <= 0 && d <= attackR) {
       speed = 0;
-      if (s.tellT <= 0) s.tellT = SHARK_LUNGE_TELL;
+      if (s.tellT <= 0) { s.tellT = SHARK_LUNGE_TELL; cue('shark', s.x, s.z); }   /* M23: the deep water thump */
       s.tellT -= dt;
       s.grp.scale.setScalar(1 + 0.15 * Math.sin(runT * 20));   /* the lurch */
       if (s.tellT <= 0) {
@@ -2245,6 +2260,7 @@ function updateSharks(dt) {
         checkDeath();
         s.atkCd = dawnDusk ? SHARK_ATK_CD / 2 : SHARK_ATK_CD;   /* aggressive dawn/dusk */
         alarmRaise('attack', s.x, s.z, 25, 6);   /* M16: a bite rings the beach */
+        cue('shark', s.x, s.z);   /* M23: the bite */
         learn('shark', 'sharks circle the reef \u2014 out of the water when one closes on you');
         toast('\u{1F40B} a shark bites');
       }
@@ -2379,6 +2395,7 @@ function updateSpiders(dt) {
       if (dc <= SPIDER_RAID_STOP) {
         if (s.tellT <= 0) {
           s.tellT = SPIDER_TELL_T;
+          cue('spider', s.x, s.z);   /* M23: the clicking tell */
           toast('\u{1F577}️ a spider is clicking near the camp...');
         }
         s.tellT -= dt;
@@ -2984,6 +3001,7 @@ function playerPos() {
 }
 function actUse() {
   if (dead) return;
+  cue('use');   /* M23 */
   const { x, z, h } = playerPos();
   /* 0. board / unboard the raft (M21) */
   const raft = camp && camp.structures.raft;
@@ -3021,6 +3039,7 @@ function actUse() {
     if (drinkCd <= 0) {
       stats.thirst = Math.min(100, stats.thirst + 35);
       drinkCd = 2.5;
+      cue('drink');   /* M23 */
       learn('water', 'you drink \u2014 cold, clear water');
       toast('\u{1F4A7} you drink');
     }
@@ -3087,6 +3106,7 @@ function actStrike() {
   if (dead) return;
   if (!spear) { toast('no spear yet \u2014 B makes one'); return; }
   if (strikeCd > 0) return;
+  cue('spear');   /* M23: the whoosh */
   const { x, z, h } = playerPos();
   if (h > 0.6) { toast('you need the shallows for fish'); return; }
   if (effectiveWeather() === 'storm') {   /* M11: lagoon surge */
@@ -3124,6 +3144,7 @@ function actFire() {
   const { x, z, h } = playerPos();
   if (h < 0.35) { toast('the water would put it out'); return; }
   makeFire(x, h, z);
+  cue('fire');   /* M23 */
   logLine('you light a fire', 'survival');
   toast('\u{1F525} a fire \u2014 light, and something to cook over');
 }
@@ -3134,6 +3155,7 @@ function actCamp() {
   const chk = campCheck(x, z);
   if (!chk.ok) { toast('no camp here \u2014 ' + chk.reason); return; }
   makeCamp(x, z);
+  cue('build');   /* M23 */
   learn('camp', 'you make your camp \u2014 flat dry ground, a flag, your place on the island');
   toast('\u26FA\uFE0F camp established \u2014 this is your ground');
 }
@@ -3148,6 +3170,7 @@ function actShelter() {
   const o = campOffsets('shelter');
   camp.structures.shelter = buildShelterMesh(o.x, heightAt(o.x, o.z), o.z,
     Math.atan2(camp.x - o.x, camp.z - o.z));
+  cue('build');   /* M23 */
   learn('shelter', 'shelter: a lean-to of palm leaf and driftwood \u2014 J');
   toast('\u26D3\uFE0F shelter built');
 }
@@ -3162,6 +3185,7 @@ function actBed() {
   const o = campOffsets('bed');
   camp.structures.bed = buildBedMesh(o.x, heightAt(o.x, o.z), o.z,
     Math.atan2(camp.x - o.x, camp.z - o.z));
+  cue('build');   /* M23 */
   learn('bed', 'bed: palm leaf on a driftwood frame \u2014 K');
   toast('\uD83D\uDECF\uFE0F bed made');
 }
@@ -3174,6 +3198,7 @@ function actFence() {
     return;
   }
   camp.structures.fence = buildFenceMesh(camp.x, camp.z, camp.rot);
+  cue('build');   /* M23 */
   learn('fence', 'fence: driftwood posts and rails around the camp \u2014 the gate faces where you were standing');
   toast('\uD83D\uDED7\uFE0F fence built \u2014 the camp has a perimeter');
 }
@@ -3187,6 +3212,7 @@ function actTorch() {
   }
   const o = campOffsets('torch');
   camp.structures.torch = buildTorchMesh(o.x, heightAt(o.x, o.z), o.z);
+  cue('build');   /* M23 */
   learn('torch', 'camp torch: a standing light for the camp \u2014 N \u2014 it burns all night');
   toast('\uD83D\uDD25 camp torch built \u2014 the camp is lit');
 }
@@ -3213,12 +3239,14 @@ function actSleep() {
   stats.health = Math.min(100, stats.health + 30);   /* rest restores, not full */
   const o = campOffsets('bed');
   rig.position.set(o.x, Math.max(heightAt(o.x, o.z), WATER - 0.25), o.z);
+  cue('sleep');   /* M23 */
   learn('sleep', 'sleep: a bed and light at camp \u2014 the night passes at your bed \u2014 Z');
   toast('\u23E8 the night passes \u2014 you wake on the bed at dawn');
 }
 function actCraftSpear() {
   if (dead || spear) return;
   spear = true;
+  cue('craft');   /* M23 */
   spearMesh.visible = true;
   logLine('you make a spear \u2014 a driftwood stick, a palm-fibre knot, a stone point', 'survival');
   toast('\u2694\uFE0F spear in hand');
@@ -3234,6 +3262,7 @@ function actCraftRope() {
   }
   INV.fiber -= ROPE_FIBER;
   INV.rope++;
+  cue('craft');   /* M23 */
   learn('rope', 'rope: tough palm fiber twisted tight \u2014 U');
   toast('\u{1FAA2} rope twisted (\u{1FAA2} ' + INV.rope + ')');
 }
@@ -3255,6 +3284,7 @@ function actBuildRaft() {
   const o = campOffsets('raft');
   camp.structures.raft = buildRaftMesh(o.x, heightAt(o.x, o.z), o.z,
     Math.atan2(camp.x - o.x, camp.z - o.z));
+  cue('build');   /* M23 */
   learn('raft', 'raft: lashed palm poles on outrigger floats \u2014 O \u2014 the way off this island');
   logLine('you lash a raft together', 'survival');
   toast('\u{1F6A3} raft built \u2014 the way off this island');
@@ -3265,6 +3295,7 @@ const WIN_R = ISLAND_R + 60;   /* past max shark reach (~260u), still on the 140
 function winEscape() {
   if (won) return;
   won = true;
+  cue('win');   /* M23 */
   onRaft = false;
   started = false;
   logLine('you row out past the reef - the island shrinks behind you', 'survival');
@@ -3298,6 +3329,7 @@ function timeRate(p) { return (p < DAY_FRAC ? 0.6 : 1.2) * (1 + dayBoost()); }
 function startEndless() {
   if (!won || endless) return;
   endless = true;
+  cue('endless');   /* M23 */
   won = false;
   started = true;                       /* unfreeze the sim (the existing gates) */
   endlessStartDay = dayOf();
@@ -3318,6 +3350,7 @@ function eatCoconut() {
   if (dead) return;
   if (INV.coconut <= 0) { toast('no coconut to eat'); return; }
   INV.coconut--;
+  cue('eat');   /* M23 */
   stats.hunger = Math.min(100, stats.hunger + 18);
   stats.thirst = Math.min(100, stats.thirst + 30);
   lastMeal = { hunger: 18, thirst: 30 };   /* M8: what a vomit would undo */
@@ -3328,6 +3361,7 @@ function eatFish() {
   if (INV.fishCooked > 0) {
     INV.fishCooked--;
     stats.hunger = Math.min(100, stats.hunger + 30);
+    cue('eat');   /* M23 */
     lastMeal = { hunger: 30, thirst: 0 };
     toast('\u{1F41F} cooked fish');
     return;
@@ -3335,6 +3369,7 @@ function eatFish() {
   if (INV.fishRaw > 0) {
     INV.fishRaw--;
     stats.hunger = Math.min(100, stats.hunger + 14);
+    cue('eat');   /* M23 */
     lastMeal = { hunger: 14, thirst: 0 };
     toast('raw fish \u2014 something, but not enough');
     return;
@@ -3346,6 +3381,7 @@ function eatCrab() {
   if (INV.crabCooked > 0) {
     INV.crabCooked--;
     stats.hunger = Math.min(100, stats.hunger + 24);
+    cue('eat');   /* M23 */
     lastMeal = { hunger: 24, thirst: 0 };
     toast('\u{1F980} cooked crab');
     return;
@@ -3353,6 +3389,7 @@ function eatCrab() {
   if (INV.crab > 0) {
     INV.crab--;
     stats.hunger = Math.min(100, stats.hunger + 12);
+    cue('eat');   /* M23 */
     lastMeal = { hunger: 12, thirst: 0 };
     toast('raw crab \u2014 a small meal');
     return;
@@ -3361,6 +3398,7 @@ function eatCrab() {
   if (INV.gullEggCooked > 0) {
     INV.gullEggCooked--;
     stats.hunger = Math.min(100, stats.hunger + 20);
+    cue('eat');   /* M23 */
     lastMeal = { hunger: 20, thirst: 0 };
     toast('\u{1F95A} cooked gull egg');
     return;
@@ -3368,6 +3406,7 @@ function eatCrab() {
   if (INV.gullEgg > 0) {
     INV.gullEgg--;
     stats.hunger = Math.min(100, stats.hunger + 10);
+    cue('eat');   /* M23 */
     lastMeal = { hunger: 10, thirst: 0 };
     toast('raw gull egg \u2014 chalky, but something');
     return;
@@ -3389,6 +3428,7 @@ function eatGathered() {
   const key = e[0], sp = e[1], cooked = e[2] === 1;
   const def = PLANT_TYPES[sp];
   INV[key]--;
+  cue('eat');   /* M23 */
   if (def.poison) {
     if (def.poison.kind === 'vomit') vomit();   /* undo the last real meal */
     else {
@@ -3411,6 +3451,7 @@ function useHerb() {
   if (dead) return;
   if (INV.herb <= 0) { toast('no herbs \u2014 E harvests the pale-green ones'); return; }
   INV.herb--;
+  cue('herb');   /* M23 */
   if (infectedWound) {
     infectedWound = false;
     learn('herb-cure', 'a healing herb closes a festering wound');
@@ -3425,6 +3466,7 @@ function checkDeath() {
   if (!dead && stats.health <= 0) {
     dead = true;
     deadEl.style.display = 'flex';
+    cue('death');   /* M23 */
     if (endless) {   /* M22: the endless score is the days survived */
       deadEl.innerHTML =
         '<h2>YOU DIED</h2>' +
@@ -3437,6 +3479,7 @@ function respawn() {
   if (!dead) return;
   dead = false;
   deadEl.style.display = 'none';
+  cue('respawn');   /* M23 */
   onRaft = false;   /* M21: death on the raft ends the crossing */
   stats.thirst = stats.hunger = stats.health = 100;
   stats.wet = 0;
@@ -3666,6 +3709,7 @@ function doLightning(x, z) {   /* M11: a strike lands on the island */
   stormFlash = 1;
   stormBoltT = 0.35;
   bolt.position.set(x, heightAt(x, z) + 20, z);
+  thunder(x, z);   /* M23: delayed by range */
   /* ignites an uncontrolled fire on open ground (cap respected; fires never die) */
   const g = heightAt(x, z);
   if (g >= 0.5 && fires.length < 5) { makeFire(x, g, z); toast('\u26A1 lightning sets a fire'); }
@@ -3839,12 +3883,188 @@ function updateSky(dt) {
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
             `\u261E ${bar(stats.wet)} ${String(stats.wet | 0).padStart(3, ' ')}\n` +
+            (sndMuted ? '\u{1F507} muted \u2014 P\n' : '') +   /* M23 */
             `🥥 ${INV.coconut}   🌾 ${INV.fiber}   \u{1FA95} ${INV.wood}   \u{1FAA2} ${INV.rope}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c   🥚 ${INV.gullEgg}r/${INV.gullEggCooked}c\n` +
             `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
             (endless ? `\u{1F30A} endless ‒ day ${dayOf()}\n` : '') +   /* M22 */
             `seed ${SEED}`;
   hudText = hp;
+}
+
+/* ---------------- M23: procedural WebAudio (generated only, no assets) ----------------
+   Oscillators + one shared deterministic noise buffer + biquad filters.
+   audioInit() runs on the first keydown (autoplay policy); until then every
+   sound call is a no-op. audioTick(dt) is read-only over game state: beds are
+   re-computed from the clock every frame, so sleep jumps / T-skips are safe.
+   No PRNG draws at all: every variation is a pure function of the clock. */
+let audioCtx = null, masterGain = null, noiseBuf = null, sndMuted = false;
+const snd = { n: 0 };   /* one-shots scheduled (smoke) */
+const beds = {};       /* gain nodes: waves / rain / wind / fire */
+let cueVol = 1, chirpT = 3, cricketT = 0, stepHalf = 0;
+function ahash(n) {   /* deterministic 32-bit hash of an integer */
+  let h = (n * 374761393 + 668265263) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) | 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+function audioInit() {
+  if (audioCtx || typeof AudioContext === 'undefined') return;   /* stub-safe guard */
+  audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = sndMuted ? 0 : 0.5;
+  masterGain.connect(audioCtx.destination);
+  const len = Math.floor(audioCtx.sampleRate * 2);
+  noiseBuf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (ahash(i) / 4294967295) * 2 - 1;   /* deterministic "white" noise */
+  const mk = (type, freq, gain) => {
+    const s = audioCtx.createBufferSource();
+    s.buffer = noiseBuf; s.loop = true;
+    const f = audioCtx.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+    const g = audioCtx.createGain(); g.gain.value = gain;
+    s.connect(f); f.connect(g); g.connect(masterGain);
+    s.start(0);
+    return g;
+  };
+  beds.waves = mk('lowpass', 420, 0.12);
+  beds.rain = mk('highpass', 800, 0);
+  beds.wind = mk('bandpass', 260, 0);
+  beds.fire = mk('bandpass', 2400, 0);
+}
+function audioResume() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+function toggleMute() {
+  sndMuted = !sndMuted;
+  if (masterGain) masterGain.gain.value = sndMuted ? 0 : 0.5;
+}
+function blip(freq, dur, type, gain, when) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + (when || 0);
+  const o = audioCtx.createOscillator();
+  o.type = type || 'sine';
+  o.frequency.value = freq;
+  const g = audioCtx.createGain();
+  g.gain.value = 0;
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(gain * cueVol, t0 + 0.008);
+  g.gain.linearRampToValueAtTime(0, t0 + dur);
+  o.connect(g); g.connect(masterGain);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+  snd.n++;
+}
+function nburst(freq, type, dur, gain, when) {   /* filtered noise burst */
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + (when || 0);
+  const s = audioCtx.createBufferSource();
+  s.buffer = noiseBuf;
+  s.playbackRate.value = 0.7 + 0.6 * ((ahash(snd.n * 7 + 1) % 100) / 100);
+  const f = audioCtx.createBiquadFilter();
+  f.type = type || 'lowpass'; f.frequency.value = freq;
+  const g = audioCtx.createGain();
+  g.gain.value = 0;
+  g.gain.setValueAtTime(gain * cueVol, t0);
+  g.gain.linearRampToValueAtTime(0, t0 + dur);
+  s.connect(f); f.connect(g); g.connect(masterGain);
+  s.start(t0, ahash(snd.n * 3 + 7) % 60000);
+  s.stop(t0 + dur + 0.02);
+  snd.n++;
+}
+/* one-shot cues; x/z present = distance-scaled + faded past ~40u */
+function cue(name, x, z, extra) {
+  if (!audioCtx) return;
+  if (x !== undefined && x !== null) {
+    const p = playerPos();
+    const d = Math.hypot(x - p.x, z - p.z);
+    if (d > 40) return;
+    cueVol = 1 / (1 + d * 0.08);
+  }
+  if (CUES[name]) CUES[name](extra);
+  cueVol = 1;
+}
+function thunder(x, z) {   /* M23: heard at any distance, delayed by range */
+  if (!audioCtx) return;
+  const p = playerPos();
+  const d = Math.hypot(x - p.x, z - p.z);
+  const dl = Math.min(2.5, d * 0.03);
+  const v = 0.3 / (1 + d * 0.025);
+  nburst(110, 'lowpass', 1.0 + Math.min(1.5, d * 0.05), v, dl);
+  nburst(70, 'lowpass', 0.8, v * 0.6, dl + 0.15);
+}
+/* distinct, teachable signature per species + survival actions */
+const CUES = {
+  drink:    () => { blip(520, 0.1, 'sine', 0.22, 0); blip(720, 0.12, 'sine', 0.18, 0.12); },
+  use:      () => nburst(1400, 'bandpass', 0.12, 0.12, 0),
+  eat:      () => { blip(300, 0.07, 'triangle', 0.2, 0); blip(240, 0.08, 'triangle', 0.16, 0.11); blip(300, 0.07, 'triangle', 0.14, 0.22); },
+  herb:     () => { blip(880, 0.1, 'sine', 0.14, 0); blip(1100, 0.14, 'sine', 0.1, 0.1); },
+  fire:     () => { nburst(900, 'lowpass', 0.5, 0.25, 0); blip(180, 0.4, 'sine', 0.1, 0.1); },
+  craft:    () => { nburst(2200, 'highpass', 0.08, 0.14, 0); nburst(2200, 'highpass', 0.08, 0.12, 0.18); blip(1500, 0.06, 'sine', 0.1, 0.36); },
+  build:    () => { nburst(700, 'lowpass', 0.1, 0.2, 0); nburst(700, 'lowpass', 0.1, 0.18, 0.16); nburst(900, 'lowpass', 0.12, 0.16, 0.34); },
+  spear:    () => { nburst(1800, 'bandpass', 0.18, 0.22, 0); blip(240, 0.1, 'triangle', 0.1, 0.1); },
+  sleep:    () => { blip(160, 0.6, 'sine', 0.12, 0); blip(120, 0.9, 'sine', 0.1, 0.5); },
+  death:    () => { blip(220, 0.4, 'sawtooth', 0.15, 0); blip(140, 0.8, 'sawtooth', 0.12, 0.35); blip(90, 1.2, 'sine', 0.12, 0.7); },
+  respawn:  () => { blip(260, 0.12, 'sine', 0.14, 0); blip(390, 0.12, 'sine', 0.14, 0.12); blip(520, 0.2, 'sine', 0.12, 0.24); },
+  win:      () => { blip(392, 0.25, 'sine', 0.16, 0); blip(494, 0.25, 'sine', 0.16, 0.15); blip(587, 0.25, 'sine', 0.16, 0.3); blip(784, 0.4, 'sine', 0.16, 0.45); },
+  endless:  () => { blip(196, 0.4, 'triangle', 0.14, 0); blip(294, 0.4, 'triangle', 0.12, 0.35); blip(392, 0.5, 'triangle', 0.12, 0.7); },
+  learn:    () => blip(1250, 0.05, 'sine', 0.06, 0),
+  step:     (mat) => {
+    if (mat === 'sand') nburst(500, 'lowpass', 0.05, 0.1, 0);
+    else if (mat === 'grass') nburst(1200, 'lowpass', 0.04, 0.09, 0);
+    else nburst(2000, 'lowpass', 0.05, 0.11, 0);
+  },
+  splash:   () => { nburst(700, 'lowpass', 0.18, 0.18, 0); blip(300, 0.1, 'sine', 0.08, 0.02); },
+  /* animal signatures: each species is identifiable without seeing it */
+  tiger:    () => { nburst(180, 'lowpass', 0.7, 0.4, 0); blip(95, 0.6, 'sawtooth', 0.2, 0.05); },
+  gull:     () => { blip(1900, 0.1, 'sine', 0.16, 0); blip(1500, 0.08, 'sine', 0.1, 0.12); blip(1650, 0.1, 'sine', 0.14, 0.7); blip(1300, 0.08, 'sine', 0.09, 0.82); blip(1450, 0.1, 'sine', 0.12, 1.4); },
+  monkey:   () => { blip(2200, 0.06, 'square', 0.09, 0); blip(2000, 0.06, 'square', 0.09, 0.14); blip(1800, 0.06, 'square', 0.09, 0.28); blip(1600, 0.06, 'square', 0.08, 0.42); },
+  lizard:   () => { nburst(500, 'lowpass', 0.12, 0.2, 0); nburst(600, 'lowpass', 0.15, 0.16, 0.14); },
+  snake:    () => { nburst(3500, 'highpass', 0.5, 0.14, 0); nburst(4000, 'highpass', 0.4, 0.12, 0.5); },
+  pelican:  () => { nburst(300, 'bandpass', 0.25, 0.24, 0); nburst(350, 'bandpass', 0.25, 0.2, 0.25); },
+  pelicanwin: () => { nburst(350, 'bandpass', 0.2, 0.2, 0); nburst(450, 'bandpass', 0.2, 0.16, 0.18); },
+  shark:    () => { blip(52, 0.35, 'sine', 0.3, 0); blip(45, 0.5, 'sine', 0.2, 0.3); },
+  spider:   () => { blip(2300, 0.03, 'square', 0.14, 0); blip(2300, 0.03, 'square', 0.14, 0.09); blip(2300, 0.03, 'square', 0.14, 0.18); blip(2300, 0.03, 'square', 0.13, 0.27); },
+  fish:     () => { blip(500, 0.08, 'sine', 0.16, 0); blip(240, 0.12, 'sine', 0.12, 0.07); },
+  crab:     () => { nburst(2600, 'highpass', 0.03, 0.1, 0); nburst(2600, 'highpass', 0.03, 0.1, 0.06); nburst(2600, 'highpass', 0.03, 0.09, 0.12); },
+  /* alarm-bus backstop (species-agnostic, soft) */
+  alarm:    () => blip(1600, 0.08, 'sine', 0.08, 0),
+  alarm2:   () => { blip(1600, 0.08, 'sine', 0.08, 0); blip(1300, 0.08, 'sine', 0.08, 0.15); },
+  thud:     () => { blip(70, 0.25, 'sine', 0.2, 0); nburst(200, 'lowpass', 0.3, 0.15, 0); },
+};
+/* per-frame: bed gains + ambient one-shots + footsteps. Read-only over state. */
+function audioTick(dt) {
+  if (!audioCtx) return;
+  audioResume();
+  const night = dayFactor < 0.5 ? 1 - dayFactor * 2 : 0;   /* 0 day -> 1 night */
+  /* island bed: waves always on (clock LFO), crickets carry the night */
+  beds.waves.gain.value = Math.max(0.02, 0.1 + 0.07 * night + 0.05 * Math.sin(runT * 0.35) + 0.06 * Math.sin(runT * 0.11));
+  beds.rain.gain.value = 0.16 * weather.vis.rain;
+  beds.wind.gain.value = 0.2 * weather.vis.storm;
+  const nf = nearestFire(rig.position.x, rig.position.z);
+  beds.fire.gain.value = Math.max(0, 1 - nf.d / 14) * 0.13;
+  /* day chirps: deterministic clock-hash schedule */
+  chirpT -= dt;
+  if (chirpT <= 0 && dayFactor > 0.6) {
+    const k = Math.floor(runT * 2), h = ahash(k);
+    chirpT = 2.5 + (h % 500) / 100;   /* 2.5-7.5 s */
+    blip(2000 + (h % 700), 0.06, 'sine', 0.05, 0);
+    blip(2400 + ((h >> 7) % 500), 0.05, 'sine', 0.04, 0.09);
+  }
+  cricketT -= dt;
+  if (cricketT <= 0 && night > 0.2) {
+    cricketT = 0.09 + 0.03 * ((ahash(Math.floor(runT * 11)) % 100) / 100);
+    blip(4200, 0.03, 'square', 0.018 * night, 0);
+  }
+  /* footsteps: one step per walkPhase half-cycle, material by zone */
+  const half = Math.floor(walkPhase / Math.PI);
+  if (half !== stepHalf) {
+    stepHalf = half;
+    const y = rig.position.y;
+    if (y <= WATER + 0.15) cue('splash', null, null, null);
+    else if (y <= 0.6) cue('step', null, null, 'sand');
+    else if (y <= 2.5) cue('step', null, null, 'grass');
+    else cue('step', null, null, 'jungle');
+  }
 }
 
 /* ---------------- main loop ---------------- */
@@ -3958,6 +4178,7 @@ function frame(t) {
   updateSky(dt);
   updateRain(dt);
   updateAnimals(dt, 'late');    /* M12: tigers then gulls, after updateSky so dayFactor is fresh */
+  audioTick(dt);     /* M23: bed gains + ambient cues + footsteps (read-only) */
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   mapDraw(dt);   /* M18: throttled redraw while the paper map is open */

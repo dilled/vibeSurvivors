@@ -38,6 +38,27 @@ globalThis.window = globalThis;
 globalThis.location = { search: '', href: 'http://localhost/', reload: () => {} };
 globalThis.__rafCb = null;
 globalThis.requestAnimationFrame = (cb) => { globalThis.__rafCb = cb; return 1; };
+globalThis.__audioTime = 0;   // M23: stub AudioContext clock, advanced by the pumps
+globalThis.__audioCalls = { osc: 0, noise: 0, buffer: 0, gain: 0, filter: 0, resume: 0 };
+/* M23: minimal WebAudio stub ‒ the game assumes window.AudioContext exists */
+class AParam { constructor(v) { this.value = v; } setValueAtTime(v) { this.value = v; } linearRampToValueAtTime(v) { this.value = v; } }
+class AudioContextStub {
+  constructor() {
+    this.state = 'suspended';
+    this.sampleRate = 44100;
+    this.destination = {};
+  }
+  get currentTime() { return globalThis.__audioTime; }
+  resume() { this.state = 'running'; globalThis.__audioCalls.resume++; return Promise.resolve(); }
+  createGain() { globalThis.__audioCalls.gain++; return { gain: new AParam(0), connect: () => {} }; }
+  createStereoPanner() { return { pan: new AParam(0), connect: () => {} }; }
+  createOscillator() { globalThis.__audioCalls.osc++; return { frequency: new AParam(440), type: 'sine', connect: () => {}, start: () => {}, stop: () => {} }; }
+  createBuffer(ch, len, rate) { globalThis.__audioCalls.buffer++; return { length: len, sampleRate: rate, numberOfChannels: ch, getChannelData: () => new Float32Array(len) }; }
+  createBufferSource() { globalThis.__audioCalls.noise++; return { buffer: null, loop: false, playbackRate: new AParam(1), connect: () => {}, start: () => {}, stop: () => {} }; }
+  createBiquadFilter() { globalThis.__audioCalls.filter++; return { type: 'lowpass', frequency: new AParam(1000), Q: new AParam(1), connect: () => {} }; }
+}
+globalThis.AudioContext = AudioContextStub;
+globalThis.window.AudioContext = AudioContextStub;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(join(here, '..', 'index.html'), 'utf8');
@@ -48,7 +69,7 @@ patched += `
 /* ---- smoke driver: island + movement + time (module scope) ---- */
 {
   let __tt = 1000;
-  const pump = (n) => { for (let i = 0; i < n; i++) { const cb = __rafCb; __rafCb = null; __tt += 16.7; if (cb) cb(__tt); } };
+  const pump = (n) => { for (let i = 0; i < n; i++) { const cb = __rafCb; __rafCb = null; __tt += 16.7; globalThis.__audioTime += 0.0167; if (cb) cb(__tt); } };   // M23: audio clock advances with the frames
   firstNight = true;   // M6: suppress the scripted beat; its dedicated M6 block re-arms it
   pump(5); // one clean frame before asserting
   setWeatherDebug('clear');   // M10: pin weather so pre-M10 blocks stay dry (schedule tested in the M10 block)
@@ -480,7 +501,7 @@ patched += `
     let s = 0;
     for (let i = 0; i < frames; i++) {
       const pre = crabs.map((c) => ({ x: c.x, z: c.z }));
-      const cb = __rafCb; __rafCb = null; __tt += 16.7; if (cb) cb(__tt);
+      const cb = __rafCb; __rafCb = null; __tt += 16.7; globalThis.__audioTime += 0.0167; if (cb) cb(__tt);   // M23
       s += crabs.reduce((a, c, i2) => a + Math.hypot(c.x - pre[i2].x, c.z - pre[i2].z), 0);
     }
     return s;
@@ -2432,6 +2453,93 @@ patched += `
 
     restore();
     if (animals.length !== 10) throw new Error('M22: the registry must still hold 10 species: ' + animals.length);
+  }
+
+  /* ---- M23: audio pass (procedural WebAudio, generated only) ---- */
+  {
+    // 1. autoplay policy: nothing is created before the first key
+    if (audioCtx !== null) throw new Error('M23: audio must not init before the first key');
+    audioInit();   // the keydown handler's first-key branch does exactly this
+    if (audioCtx === null) throw new Error('M23: audioInit should create the context');
+    if (audioCtx.state !== 'running') throw new Error('M23: audioInit should resume the context');
+    if (!masterGain || masterGain.gain.value !== 0.5)
+      throw new Error('M23: master gain should start at 0.5 unmuted: ' + (masterGain && masterGain.gain.value));
+    for (const b of ['waves', 'rain', 'wind', 'fire'])
+      if (!beds[b]) throw new Error('M23: ambience bed missing: ' + b);
+
+    const ac = globalThis.__audioCalls;
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    park(spawn.x, spawn.z);
+    setWeatherDebug('clear'); pump(60);   // settle beds to clear
+
+    // 2. thunder: a strike schedules delayed noise bursts (near = louder/earlier)
+    const tn0 = ac.noise;
+    doLightning(5, 5);
+    if (ac.noise - tn0 < 2) throw new Error('M23: doLightning should schedule the thunder bursts');
+    stats.health = 100; dead = false; deadEl.style.display = 'none';
+    while (fires.length > 0) { const f = fires.pop(); scene.remove(f.grp); }   // the strike may have ignited ground
+
+    // 3. weather beds follow the blended vis values
+    setWeatherDebug('rain'); pump(120);
+    if (weather.vis.rain < 0.9) throw new Error('M23: rain vis should rise: ' + weather.vis.rain);
+    if (Math.abs(beds.rain.gain.value - 0.16 * weather.vis.rain) > 1e-9)
+      throw new Error('M23: rain bed gain should track weather.vis.rain');
+    setWeatherDebug('storm'); pump(120);
+    if (beds.wind.gain.value < 0.05) throw new Error('M23: storm wind bed should rise: ' + beds.wind.gain.value);
+    setWeatherDebug('clear'); pump(400);
+    if (beds.rain.gain.value > 0.02 || beds.wind.gain.value > 0.02)
+      throw new Error('M23: weather beds should decay to clear');
+
+    // 4. alarm-bus backstop cues (scream/alert/attack) + the distance gate
+    const px = rig.position.x, pz = rig.position.z;   // cues are relative to the player
+    const o0 = ac.osc;
+    alarmRaise('scream', px + 5, pz + 5, 20, 3);
+    if (ac.osc - o0 < 2) throw new Error('M23: scream alarm should raise the backstop cue');
+    const o1 = ac.osc;
+    alarmRaise('alert', px + 7, pz + 7, 20, 3);
+    if (ac.osc - o1 < 1) throw new Error('M23: alert alarm should raise the backstop cue');
+    const n0t = ac.osc + ac.noise;
+    alarmRaise('attack', px + 9, pz + 9, 20, 3);
+    if (ac.osc + ac.noise - n0t < 2) throw new Error('M23: attack alarm should raise the thud backstop');
+    const f0 = ac.osc + ac.noise;
+    cue('tiger', px + 300, pz + 300);   // >40u away: distance gate must swallow it
+    if (ac.osc + ac.noise !== f0) throw new Error('M23: cues beyond 40u should not schedule sources');
+    const f1 = ac.osc + ac.noise;
+    cue('tiger', px + 10, pz + 10);
+    if (ac.osc + ac.noise - f1 < 2) throw new Error('M23: the tiger roar should schedule its signature');
+    alarms.length = 0;   // the backstop tests added alarms on purpose
+
+    // 5. footsteps: one per walkPhase half-cycle while moving, none when stopped
+    keys['KeyW'] = true; park(spawn.x, spawn.z);
+    const h0 = stepHalf, ph0 = walkPhase;
+    pump(90); keys['KeyW'] = false;
+    if (walkPhase - ph0 < Math.PI * 4) throw new Error('M23: the player should have been walking');
+    if (stepHalf <= h0) throw new Error('M23: footsteps should tick while walking');
+    const h1 = stepHalf;
+    pump(90);
+    if (stepHalf !== h1) throw new Error('M23: no footsteps should tick while stopped');
+
+    // 6. survival action cues schedule sources
+    const a0 = ac.osc + ac.noise;
+    INV.coconut = 1; eatCoconut();
+    if (ac.osc + ac.noise - a0 < 3) throw new Error('M23: eating should schedule its cue');
+    const a1 = ac.osc + ac.noise;
+    actFire();
+    if (fires.length < 1) throw new Error('M23: the fire should light at the spawn beach');
+    if (ac.osc + ac.noise - a1 < 2) throw new Error('M23: lighting a fire should schedule its cue');
+    while (fires.length > 0) { const f = fires.pop(); scene.remove(f.grp); }
+
+    // 7. mute: P flips the master gain to 0 and back
+    const g0 = masterGain.gain.value;
+    toggleMute();
+    if (!sndMuted || masterGain.gain.value !== 0) throw new Error('M23: mute should zero the master gain');
+    toggleMute();
+    if (sndMuted || masterGain.gain.value !== g0) throw new Error('M23: unmuting should restore the master gain');
+
+    // restore clean state
+    INV.coconut = 0; INV.fishCooked = 0;
+    setWeatherDebug('clear');
+    if (animals.length !== 10) throw new Error('M23: the registry must still hold 10 species: ' + animals.length);
   }
 }
 `;
