@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [m22, endless, escalation, win]
 created: "2026-10-18T01:08:32"
-updated: "2026-10-18T01:08:57"
+updated: "2026-10-18T03:23:04"
 ---
 
 <!-- compiled_truth -->
@@ -20,7 +20,7 @@ M22 = endless mode + adaptation/escalating pressure (PLAN.md M22). Shipped `d421
 - Day `boost(0.04/day, cap 0.5)`: flows through `timeRate(p)` into the frame tick ‒ base 12h day = 20 real min / 12h night = 10 min (0.6 / 1.2 rate), endless up to +50% faster (shorter days).
 - Storm: weight in `weatherPick` and duration in `weatherDur` multiplied by (1+sb) / (1+0.3sb) with `sb` capped at 1.0; same single-draw structure, no new rng draws, same draw order, story sb = 0. `stormBoost` is computed from the segment start day index `floor((p0*1800+min)/1800) - (endlessStartDay-1)` so the first endless day stays gentle. Cached weather segments keep their generation-time boost, so M10/M11 replays are untouched.
 
-**Scoring & death in endless:** score = days survived. HUD gains an "🏝 endless ‒ day N" line while endless. The endless death overlay shows days survived (`dayOf() - endlessStartDay + 1`) + discoveries while `respawn()` stays the spec-correct camp respawn with carried loot lost; the story dead overlay is untouched.
+**Scoring & death in endless:** score = days survived. HUD gains an "🏝 endless ‒ day N" line while endless. The endless death overlay shows days survived (`dayOf() - endlessStartDay + 1`) + discoveries while `respawn()` stays the spec-correct camp respawn with carried loot lost. (M26 refinement: the *story* dead overlay is now camp-aware ‒ with a camp it rewrites to the "wake at your camp (you lose what you were carrying)" wording matching `respawn()`, static text stays the no-camp default; the endless branch keeps its days-survived text ‒ see [[m26-single-player-v1]].)
 
 **Deliberate scope limits:** boat tier-5 item, save/persistence (`[[m25]]`-style work) stay later; only tiger + pelican escalate (other species are out of scope). Zero world-gen / `PLANT_TYPES` / animal-registry changes (registry stays 10).
 
@@ -41,4 +41,10 @@ M22 = endless mode + adaptation/escalating pressure (PLAN.md M22). Shipped `d421
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: brain update-truth
+  affects: [m22-endless-mode]
+
+- time: 2026-10-18T03:23:04
+  kind: decision
+  summary: "Corrected stale claim: M26 made the story dead overlay camp-aware (see [[m26-single-player-v1]]); endless branch unchanged"
+  source: commit 58f0668
   affects: [m22-endless-mode]
