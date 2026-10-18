@@ -89,6 +89,7 @@
     <div class="row"><span>move / sprint</span><b>W A S D &middot; Shift</b></div>
     <div class="row"><span>use &mdash; drink / pick / shake / cook / catch</span><b>E</b></div>
     <div class="row"><span>eat &mdash; coconut / fish / crab / egg / foraged</span><b>C &middot; F &middot; V &middot; Q</b></div>
+    <div class="row"><span>chew a healing herb</span><b>M</b></div>
     <div class="row"><span>make fire / make spear</span><b>G &middot; B</b></div>
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
     <div class="row"><span>twist rope / build the raft</span><b>U &middot; O</b></div>
@@ -724,7 +725,7 @@ window.addEventListener('keydown', (e) => {
   if (!started && !won) {
     started = true; audioInit(); overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800);   /* M23: first key unlocks audio (autoplay) */
     if (bootSave) {   /* M25: a run exists on this device ‒ the first key continues it, N starts a new island */
-      if (e.code === 'KeyN') clearSave();
+      if (e.code === 'KeyN') { clearSave(); return; }   /* M26: N = fresh island ‒ no fall-through into the action keys */
       else { loadGame(); return; }   /* swallow the first key so it doesn't double-fire an action */
     }
   }
@@ -3511,6 +3512,10 @@ function checkDeath() {
       deadEl.innerHTML =
         '<h2>YOU DIED</h2>' +
         '<p>days survived <b>' + (dayOf() - endlessStartDay + 1) + '</b> &nbsp;&middot;&nbsp; discoveries <b>' + journal.length + '</b></p>' +
+        '<p><b>R</b> &mdash; wake at your camp (you lose what you were carrying)</p>';
+    } else if (camp) {   /* M26: story death is camp-aware, matching respawn() (the static text is the no-camp default) */
+      deadEl.innerHTML =
+        '<h2>YOU DIED</h2>' +
         '<p><b>R</b> &mdash; wake at your camp (you lose what you were carrying)</p>';
     }
   }

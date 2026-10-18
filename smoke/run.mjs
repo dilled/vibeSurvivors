@@ -32,7 +32,7 @@ globalThis.document = {
   getElementById: (id) => (byId[id] ||= { style: {}, addEventListener: () => {}, textContent: '', innerHTML: '' }),
   addEventListener: () => {},
 };
-globalThis.addEventListener = () => {};
+globalThis.addEventListener = (ev, cb) => { if (ev === 'keydown') globalThis.__keydownCb = cb; };   // M26: capture the game's title-card/action keydown handler
 globalThis.removeEventListener = () => {};
 globalThis.window = globalThis;
 globalThis.location = { search: '', href: 'http://localhost/', reload: () => {} };
@@ -2802,6 +2802,433 @@ patched += `
     if (sharks.length < 1) throw new Error('M25: the shark population changed');
     if (animals.length !== 10) throw new Error('M25: the registry must still hold 10 species');
   }
+
+  /* ---- M26: single-player v1 end-to-end playthrough ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const ls = globalThis.localStorage;
+    const kd = globalThis.__keydownCb;
+    if (typeof kd !== 'function') throw new Error('M26: the window stub must capture the keydown handler');
+
+    // 0. snapshot the whole live state ‒ this block runs the entire story and must
+    //    leave everything exactly as the earlier blocks left it
+    const segLenIn = weather.segs.length;
+    const evDoneIn = weather.segs.map((s) => (s.evs ? s.evs.map((e) => e.done) : null));
+    const campIn = camp;
+    const campStructIn = camp ? { shelter: camp.structures.shelter, bed: camp.structures.bed,
+      fence: camp.structures.fence, torch: camp.structures.torch, raft: camp.structures.raft } : null;
+    const firesIn = fires.slice();
+    const itemsIn = items.slice();
+    const palmsIn = palms.map((p) => p.cocos);
+    const plantsIn = plants.map((p) => ({ s: p.state, m: p.min, c: p.chargesLeft, w: p.wear }));
+    const nestIn = { eggs: gullNest.eggs, vis: gullNest.eggMeshes.map((m) => m.visible) };
+    const scalIn = { p0, gameMin, plantClock, firstNight, started, dead, won, endless,
+      endlessStartDay, endlessStartMin, onRaft, spear, drinkCd, strikeCd, poisonDrain,
+      infectedWound, lastMeal };
+    const invIn = { ...INV }, statsIn = { ...stats };
+    const learnedIn = new Set(learned), journalIn = journal.slice();
+    const mapKnownIn = [...mapKnown], mapVisitedIn = [...mapVisited];
+    const rigIn = [rig.position.x, rig.position.y, rig.position.z, rig.rotation.y];
+    const domIn = { deadHtml: deadEl.innerHTML, deadDisp: deadEl.style.display,
+      wonHtml: wonEl.innerHTML, wonDisp: wonEl.style.display,
+      playline: (document.getElementById('playline').innerHTML || ''),
+      ovOp: overlay.style.opacity, ovDisp: overlay.style.display, hint: hintEl.textContent };
+    const saveIn = ls.getItem(SAVE_KEY);
+    const bootSaveIn = bootSave;
+    const restore = () => {
+      for (const k in keys) keys[k] = false;
+      for (const f of fires) scene.remove(f.grp); fires.length = 0;
+      for (const f of firesIn) { fires.push(f); scene.add(f.grp); }
+      for (const it of items) scene.remove(it.mesh); items.length = 0;
+      for (const it of itemsIn) { items.push(it); scene.add(it.mesh); }
+      if (camp) {
+        scene.remove(camp.grp);
+        for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (camp.structures[k]) scene.remove(camp.structures[k]);
+        camp = null;
+      }
+      if (campIn) {
+        scene.add(campIn.grp);
+        for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (campStructIn[k]) scene.add(campStructIn[k]);
+        camp = campIn;
+      }
+      for (let i = 0; i < palms.length; i++) {
+        const p = palms[i];
+        p.cocos = palmsIn[i];
+        for (let j = 0; j < 2; j++) {
+          if (j < p.cocos) {
+            if (j === 0) setM(p.idx * 2, cocosMesh, p.top[0] + 0.18, p.top[1] - 0.18, p.top[2] + 0.1, 0, 0, 0, 1, 1, 1);
+            else setM(p.idx * 2 + 1, cocosMesh, p.top[0] - 0.15, p.top[1] - 0.18, p.top[2] - 0.14, 0, 0, 0, 1, 1, 1);
+          } else setM(p.idx * 2 + j, cocosMesh, 9999, -99, 9999, 0, 0, 0, 0, 0, 0);
+        }
+      }
+      for (let i = 0; i < plants.length; i++) {
+        const p = plants[i], q = plantsIn[i];
+        if (p.state !== q.s || p.min !== q.m || p.chargesLeft !== q.c || p.wear !== q.w) {
+          p.state = q.s; p.min = q.m; p.chargesLeft = q.c; p.wear = q.w;
+          emitPlant(p);
+        }
+      }
+      gullNest.eggs = nestIn.eggs;
+      for (let i = 0; i < gullNest.eggMeshes.length; i++) gullNest.eggMeshes[i].visible = nestIn.vis[i];
+      weather.segs.length = segLenIn;
+      for (let i = 0; i < weather.segs.length; i++)
+        if (evDoneIn[i]) for (let k = 0; k < weather.segs[i].evs.length; k++) weather.segs[i].evs[k].done = evDoneIn[i][k];
+      weatherRng = mulberry32(SEED + WEATHER_SEED_OFFSET);   /* resync the stream to the restored seg list (the M25 loadGame pattern) */
+      for (let k = 0; k < 1 + 2 * (segLenIn - 1); k++) weatherRng();
+      p0 = scalIn.p0; gameMin = scalIn.gameMin; plantClock = scalIn.plantClock; firstNight = scalIn.firstNight;
+      started = scalIn.started; dead = scalIn.dead; won = scalIn.won; endless = scalIn.endless;
+      endlessStartDay = scalIn.endlessStartDay; endlessStartMin = scalIn.endlessStartMin;
+      onRaft = scalIn.onRaft; spear = scalIn.spear; spearMesh.visible = spear;
+      drinkCd = scalIn.drinkCd; strikeCd = scalIn.strikeCd;
+      poisonDrain = scalIn.poisonDrain; infectedWound = scalIn.infectedWound; lastMeal = scalIn.lastMeal;
+      for (const k in INV) INV[k] = invIn[k];
+      stats.thirst = statsIn.thirst; stats.hunger = statsIn.hunger; stats.health = statsIn.health; stats.wet = statsIn.wet;
+      learned.clear(); for (const k of learnedIn) learned.add(k);
+      journal.length = 0; journal.push(...journalIn);
+      mapKnown.clear(); for (const k of mapKnownIn) mapKnown.add(k);
+      mapVisited.fill(0); for (let i = 0; i < mapVisitedIn.length; i++) mapVisited[i] = mapVisitedIn[i];
+      rig.position.set(rigIn[0], rigIn[1], rigIn[2]); rig.rotation.y = rigIn[3];
+      deadEl.innerHTML = domIn.deadHtml; deadEl.style.display = domIn.deadDisp;
+      wonEl.innerHTML = domIn.wonHtml; wonEl.style.display = domIn.wonDisp;
+      document.getElementById('playline').innerHTML = domIn.playline;
+      overlay.style.opacity = domIn.ovOp; overlay.style.display = domIn.ovDisp;
+      hintEl.textContent = domIn.hint;
+      bootSave = bootSaveIn;
+      if (saveIn === null) { if (ls.getItem(SAVE_KEY) !== null) ls.removeItem(SAVE_KEY); }
+      else ls.setItem(SAVE_KEY, saveIn);
+    };
+    const restoreAtEnd = restore;
+
+    // fresh-run reset: the playthrough starts from wash-ashore, nothing carried
+    for (const k in keys) keys[k] = false;
+    if (camp) {
+      scene.remove(camp.grp);
+      for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (camp.structures[k]) scene.remove(camp.structures[k]);
+      camp = null;
+    }
+    for (const f of fires) scene.remove(f.grp); fires.length = 0;
+    for (const it of items) scene.remove(it.mesh); items.length = 0;
+    for (const k in INV) INV[k] = 0;
+    spear = false; spearMesh.visible = false;
+    stats.thirst = 80; stats.hunger = 80; stats.health = 100; stats.wet = 0;
+    drinkCd = 0; strikeCd = 0; poisonDrain = null; infectedWound = false;
+    started = true; dead = false; won = false; endless = false; onRaft = false;
+    setClockP(0.33); setWeatherDebug('clear');
+    gameMin = 0;   /* the run starts at the story clock (the schedule is a pure function of gameMin) */
+
+    // 1. wash up at the water's edge and drink
+    {
+      let wx = NaN, wz = NaN;
+      for (let r = ISLAND_R * 1.06; r > 5 && isNaN(wx); r -= 1.5)
+        for (let k = 0; k < 24; k++) {
+          const a = (k / 24) * Math.PI * 2 + 0.37;
+          const x = Math.cos(a) * r, z = Math.sin(a) * r;
+          if (heightAt(x, z) < 0.25) { wx = x; wz = z; break; }
+        }
+      if (isNaN(wx)) throw new Error('M26: no shallow water point for the drink');
+      park(wx, wz);
+      stats.thirst = 40;
+      actUse();
+      if (Math.abs(stats.thirst - 75) > 1e-9) throw new Error('M26: a drink must restore +35 thirst');
+      if (!learned.has('water')) throw new Error('M26: the drink must teach the water rule');
+      pump(160);   /* the drink cooldown lapses while the run keeps moving */
+    }
+
+    // 2. spear + fish, cook the catch over a fire, eat it
+    actCraftSpear();
+    if (!spear || !spearMesh.visible) throw new Error('M26: B must craft the spear');
+    const sc = schools.find((s) => s.n > 0);
+    if (!sc) throw new Error('M26: a fish school must remain in the shallows');
+    park(sc.x, sc.z);
+    const raw0 = INV.fishRaw;
+    actStrike();
+    if (INV.fishRaw < raw0 + 1) throw new Error('M26: X must spear at least one fish');
+    if (!learned.has('fish')) throw new Error('M26: the spear must teach the fish rule');
+    let fx = NaN, fz = NaN;
+    for (let r = ISLAND_R * 0.9; r > 5 && isNaN(fx); r -= 2)
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2 + 1.1;
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        const h = heightAt(x, z);
+        if (h < 0.5 || h > 2.5) continue;
+        if (palms.some((p) => Math.hypot(p.x - x, p.z - z) < 3.5)) continue;   /* keep the palm shake clean */
+        fx = x; fz = z; break;
+      }
+    if (isNaN(fx)) throw new Error('M26: no dry sand point for the fire');
+    park(fx, fz);
+    actFire();
+    if (fires.length !== 1) throw new Error('M26: G must light a fire on dry sand');
+    park(fires[0].x, fires[0].z);
+    actUse();
+    if (!fires[0].cooking || fires[0].cooking.item !== 'fishRaw')
+      throw new Error('M26: E by the fire must start cooking the fish');
+    pump(170);   /* the 2.5 s cook finishes */
+    if (fires[0].cooking) throw new Error('M26: the cook must have finished');
+    if (INV.fishCooked < 1 || INV.fishRaw > raw0) throw new Error('M26: the cook must yield cooked fish');
+    const hun0 = stats.hunger;
+    eatFish();
+    if (stats.hunger !== Math.min(100, hun0 + 30)) throw new Error('M26: eating cooked fish must feed +30');
+
+    // 3. shake a coconut, pick it up, drink it
+    const cocoPalm = palms.find((p) => p.cocos > 0);
+    if (!cocoPalm) throw new Error('M26: a coconut-bearing palm must exist');
+    park(cocoPalm.x, cocoPalm.z);
+    const coco0 = cocoPalm.cocos;
+    const itemsBefore = items.length;
+    actUse();
+    if (cocoPalm.cocos !== coco0 - 1) throw new Error('M26: E on the palm must drop a coconut');
+    if (items.length !== itemsBefore + 1) throw new Error('M26: the drop must become a ground item');
+    pump(120);   /* the coconut lands */
+    const it = items.find((i) => !i.taken && i.state === 'ground' &&
+      Math.hypot(i.x - cocoPalm.x, i.z - cocoPalm.z) < 2);
+    if (!it) throw new Error('M26: the coconut must settle on the ground near the palm');
+    park(it.x, it.z);
+    actUse();
+    if (INV.coconut !== 1 || it.taken !== true) throw new Error('M26: E must pick up the coconut');
+    eatCoconut();
+    if (INV.coconut !== 0) throw new Error('M26: C must eat the coconut');
+    if (!learned.has('coco')) throw new Error('M26: the coconut must teach the coco rule');
+
+    // 4. forage: harvest a ready plant and eat what it drops
+    {
+      const eatKeys = new Set(VEG_EAT_ORDER.map((e) => e[0]));
+      let ph = null;
+      for (const p of plants) {
+        if (p.state !== 'ready' || !PLANT_TYPES[p.type].drop || !eatKeys.has(PLANT_TYPES[p.type].drop.invKey)) continue;
+        if (heightAt(p.x, p.z) < 0.3) continue;
+        if (palms.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 4)) continue;
+        if (fires.some((f) => !f.cooking && Math.hypot(f.x - p.x, f.z - p.z) < 3)) continue;
+        if (items.some((i) => !i.taken && Math.hypot(i.x - p.x, i.z - p.z) < 2)) continue;
+        if (crabs.some((c) => c.alive && Math.hypot(c.x - p.x, c.z - p.z) < 2)) continue;
+        if (Math.hypot(p.x - gullNest.x, p.z - gullNest.z) < 3) continue;
+        ph = p; break;
+      }
+      if (!ph) {   /* day-1 seed: if none is naturally ripe, ripen one in place */
+        ph = plants.find((p) => PLANT_TYPES[p.type].drop && eatKeys.has(PLANT_TYPES[p.type].drop.invKey) &&
+          p.chargesLeft > 0 && heightAt(p.x, p.z) >= 0.3 &&
+          !palms.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 4)) || null;
+        if (!ph) throw new Error('M26: no harvestable plant spot');
+        ph.state = 'ready'; ph.min = 0;
+      }
+      park(ph.x, ph.z);
+      const drop = PLANT_TYPES[ph.type].drop;
+      const k0 = INV[drop.invKey] || 0;
+      actUse();
+      if ((INV[drop.invKey] || 0) !== k0 + drop.n) throw new Error('M26: E must harvest the ready plant');
+      eatGathered();
+      if ((INV[drop.invKey] || 0) !== k0 + drop.n - 1) throw new Error('M26: Q must eat the foraged drop');
+    }
+
+    // 5. establish the camp and raise all five structures
+    let cx = NaN, cz = NaN;
+    for (let r = 8; r < ISLAND_R * 0.8 && isNaN(cx); r += 6)
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        if (campCheck(x, z).ok) { cx = x; cz = z; break; }
+      }
+    if (isNaN(cx)) throw new Error('M26: no valid camp spot found');
+    park(cx, cz);
+    actCamp();
+    if (!camp) throw new Error('M26: H must establish the camp');
+    if (ls.getItem(SAVE_KEY) === null) throw new Error('M26: establishing the camp must write a save');
+    park(camp.x, camp.z);
+    actShelter(); actBed(); actFence(); actTorch();
+    if (!camp.structures.shelter || !camp.structures.bed || !camp.structures.fence || !camp.structures.torch)
+      throw new Error('M26: J/K/L/N must build all four camp structures');
+    if (!campIsLit()) throw new Error('M26: the torch must light the camp');
+
+    // 6. sleep at the bed: dawn clock jump, rest heals, the soak clears
+    setClockP(0.55);
+    park(camp.x, camp.z);
+    stats.wet = 40; stats.health = 50; stats.thirst = 100; stats.hunger = 100;
+    const pBefore = (p0 + gameMin / 1800) % 1;
+    if (pBefore < 0.4 || pBefore >= DAY_FRAC) throw new Error('M26: the sleep test must start in the afternoon');
+    actSleep();
+    const pAfter = (p0 + gameMin / 1800) % 1;
+    if (pAfter < 0.03 || pAfter > 0.08) throw new Error('M26: sleep must wake at dawn (~0.05): ' + pAfter);
+    if (stats.wet !== 0) throw new Error('M26: sleep must clear the soak');
+    if (Math.abs(stats.health - 80) > 1e-9) throw new Error('M26: rest must heal +30 (50 -> 80)');
+    if (!learned.has('sleep')) throw new Error('M26: sleep must teach the sleep rule');
+    if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10)
+      throw new Error('M26: sleep must wake the player at the bed');
+
+    // 7. storm: the soak teaches the wet rule; the shelter dries you off
+    setWeatherDebug('storm');
+    let sx = NaN, sz = NaN, sbest = -1;
+    const due = [];
+    for (const s of weather.segs) for (const ev of s.evs)
+      if (ev.kind === 'strike' && !ev.done && ev.t <= gameMin + 12) due.push(ev);
+    for (let r = 10; r < ISLAND_R * 0.85; r += 5)
+      for (let k = 0; k < 20; k++) {
+        const a = (k / 20) * Math.PI * 2 + 0.2;
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        if (heightAt(x, z) < 0.5) continue;
+        if (Math.hypot(x - camp.x, z - camp.z) < 12) continue;   /* stay clear of the dry shelter */
+        let mn = Infinity;
+        for (const ev of due) mn = Math.min(mn, Math.hypot(x - ev.x, z - ev.z));
+        if (mn > sbest) { sbest = mn; sx = x; sz = z; }
+      }
+    if (isNaN(sx)) throw new Error('M26: no exposed dry spot for the storm soak');
+    park(sx, sz);
+    stats.wet = 0;
+    pump(300);   /* ~5 s in the open storm */
+    if (stats.wet <= 15) throw new Error('M26: the storm must soak an exposed player: ' + stats.wet);
+    if (!learned.has('wet')) throw new Error('M26: the soak must teach the wet rule');
+    setWeatherDebug('clear');
+    const shP = camp.structures.shelter.position;
+    park(shP.x, shP.z);
+    pump(600);
+    if (stats.wet !== 0) throw new Error('M26: the shelter must dry the player off');
+
+    // 8. a spent palm drops straight poles (wood)
+    const spent = palms.find((p) => p.cocos === 0 &&
+      !items.some((i) => !i.taken && Math.hypot(i.x - p.x, i.z - p.z) < 1.7) &&
+      !fires.some((f) => !f.cooking && Math.hypot(f.x - p.x, f.z - p.z) < 2.6));
+    if (!spent) throw new Error('M26: a clean spent palm must exist');
+    park(spent.x, spent.z);
+    const wood0 = INV.wood;
+    actUse();
+    if (INV.wood !== wood0 + 1) throw new Error('M26: a spent palm must drop +1 wood');
+    if (!learned.has('wood')) throw new Error('M26: the spent palm must teach the wood rule');
+
+    // 9. twist the rope (fiber is already foraged)
+    INV.fiber = Math.max(INV.fiber, ROPE_FIBER);
+    actCraftRope();
+    if (INV.rope < 1) throw new Error('M26: U must twist a rope');
+    if (!learned.has('rope')) throw new Error('M26: rope must be recorded');
+
+    // 10. build the raft at camp
+    INV.wood = Math.max(INV.wood, RAFT_WOOD);
+    INV.rope = Math.max(INV.rope, RAFT_ROPE);
+    park(camp.x, camp.z);
+    const w0 = INV.wood, r0 = INV.rope;
+    actBuildRaft();
+    if (!camp.structures.raft) throw new Error('M26: O must build the raft at camp');
+    if (INV.wood !== w0 - RAFT_WOOD || INV.rope !== r0 - RAFT_ROPE)
+      throw new Error('M26: the raft must cost ' + RAFT_WOOD + ' wood + ' + RAFT_ROPE + ' rope');
+
+    // 11. board and row past the reef: the run is won, the save is cleared
+    park(camp.structures.raft.position.x, camp.structures.raft.position.z);
+    actUse();
+    if (onRaft !== true) throw new Error('M26: E must board the raft');
+    const raft = camp.structures.raft;
+    raft.position.set(0, WATER, WIN_R + 10);
+    rig.position.set(0, WATER + 0.7, WIN_R + 10);
+    pump(3);
+    if (won !== true || started !== false || onRaft !== false)
+      throw new Error('M26: rowing past the reef must win and freeze the sim');
+    if (ls.getItem(SAVE_KEY) !== null) throw new Error('M26: a finished run must clear the save');
+    if (wonEl.style.display !== 'flex' || String(wonEl.innerHTML).indexOf('YOU LEFT THE ISLAND') < 0)
+      throw new Error('M26: the win overlay must show the escape');
+
+    // 12. stay on the island: endless starts, the island ramps by the day
+    startEndless();
+    if (endless !== true || won !== false || started !== true)
+      throw new Error('M26: E on the win overlay must start endless');
+    if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 1e-6)
+      throw new Error('M26: endless must restart the run at camp');
+    if (!learned.has('endless')) throw new Error('M26: endless must be recorded');
+    gameMin = endlessStartMin - p0 * 1800 + 1800;   /* one endless day in */
+    if (endlessDay() !== 1) throw new Error('M26: one endless day expected: ' + endlessDay());
+    if (Math.abs(tigerBoost() - 0.12) > 1e-9) throw new Error('M26: the tiger ramp must be 0.12 at endless day 1');
+    if (Math.abs(timeRate(0.3) - 0.6 * 1.04) > 1e-9) throw new Error('M26: the day rate must scale with the day boost');
+
+    // 13. death in endless: days-survived overlay, camp respawn, loot lost
+    INV.coconut = 1;
+    stats.health = 0;
+    checkDeath();
+    if (dead !== true) throw new Error('M26: zero health must kill');
+    if (String(deadEl.innerHTML).indexOf('days survived') < 0)
+      throw new Error('M26: the endless death overlay must show the days-survived score');
+    respawn();
+    if (dead !== false || stats.health !== 100 || stats.thirst !== 100 || stats.hunger !== 100)
+      throw new Error('M26: respawn must wake at full vitals');
+    if (INV.coconut !== 0) throw new Error('M26: respawn must drop the carried loot');
+    if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 1e-6)
+      throw new Error('M26: respawn must wake at camp');
+
+    // 14. story death with a camp: the overlay must match the camp respawn
+    endless = false;
+    stats.health = 0;
+    checkDeath();
+    if (dead !== true) throw new Error('M26: zero health must kill again');
+    const storyDead = String(deadEl.innerHTML);
+    if (storyDead.indexOf('wake at your camp') < 0 || storyDead.indexOf('days survived') >= 0)
+      throw new Error('M26: the story death overlay must be camp-aware when a camp exists: ' + storyDead);
+    respawn();
+    if (dead !== false) throw new Error('M26: respawn must wake again');
+
+    // 15. save/load round-trip of the finished camp + structures
+    logLine('m26 end-to-end marker', 'survival');
+    stats.thirst = 41; stats.hunger = 44; stats.health = 55; stats.wet = 7;
+    INV.wood = 5; INV.rope = 2; INV.fiber = 3; INV.coconut = 1;
+    rig.position.set(14.5, 3.5, -9.5); rig.rotation.y = 2.2;
+    saveGame();
+    const raw15 = ls.getItem(SAVE_KEY);
+    if (!raw15) throw new Error('M26: a live run must be savable');
+    stats.thirst = 1; stats.health = 99;
+    gameMin += 900; p0 = 0.9;
+    INV.wood = 99;
+    learned.add('m26scratched');
+    scene.remove(camp.grp);
+    for (const k of ['shelter', 'bed', 'fence', 'torch', 'raft']) if (camp.structures[k]) scene.remove(camp.structures[k]);
+    camp = null;
+    if (!loadGame()) throw new Error('M26: loadGame must restore the round-trip save');
+    const sv15 = JSON.parse(raw15);
+    if (stats.thirst !== 41 || stats.hunger !== 44 || stats.health !== 55 || stats.wet !== 7)
+      throw new Error('M26: the stats must round-trip');
+    if (INV.wood !== 5 || INV.rope !== 2 || INV.fiber !== 3 || INV.coconut !== 1)
+      throw new Error('M26: the inventory must round-trip');
+    if (Math.abs(rig.position.x - 14.5) > 1e-9 || Math.abs(rig.position.z + 9.5) > 1e-9 || Math.abs(rig.rotation.y - 2.2) > 1e-9)
+      throw new Error('M26: the position must round-trip');
+    if (Math.abs(gameMin - sv15.gameMin) > 1e-9 || p0 !== sv15.p0)
+      throw new Error('M26: the clock must round-trip');
+    if (learned.has('m26scratched')) throw new Error('M26: the load must replace the live state');
+    if (!journal.some((e) => e.msg === 'm26 end-to-end marker'))
+      throw new Error('M26: the journal must round-trip');
+    if (!camp || !camp.structures.shelter || !camp.structures.bed || !camp.structures.fence ||
+        !camp.structures.torch || !camp.structures.raft)
+      throw new Error('M26: the camp + all structures must be rebuilt on load');
+    if (weather.segs.length !== sv15.weather.segs.length)
+      throw new Error('M26: the weather segments must round-trip');
+
+    // 16. title-card key paths: N clears the save for a fresh island (no fall-through
+    //     into the action keys), any other first key continues the run
+    bootSave = readSave();
+    if (!bootSave) throw new Error('M26: a valid save must exist for the title-card test');
+    park(camp.x, camp.z);
+    const torchMesh = camp.structures.torch;
+    camp.structures.torch = null;   /* makes a spurious actTorch observable */
+    started = false;
+    kd({ code: 'KeyN', repeat: false });
+    keys['KeyN'] = false;
+    if (started !== true) throw new Error('M26: the first key must start the game');
+    if (ls.getItem(SAVE_KEY) !== null) throw new Error('M26: N on the title card must clear the save (fresh island)');
+    if (camp.structures.torch !== null) throw new Error('M26: N must not fall through into actTorch');
+    camp.structures.torch = torchMesh;
+    stats.health = 61;
+    saveGame();
+    stats.health = 90;
+    started = false;
+    kd({ code: 'KeyA', repeat: false });
+    keys['KeyA'] = false;
+    if (started !== true) throw new Error('M26: the first key must start the game (continue path)');
+    if (stats.health !== 61) throw new Error('M26: the first key on the title card must load the save');
+
+    restoreAtEnd();
+
+    // 17. house invariants: the playthrough left the world intact
+    if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100)
+      throw new Error('M26: the static vegetation populations changed');
+    if (crabs.length !== 15 || tigers.length !== 3 || gulls.length !== 5 ||
+        pelicans.length !== 3 || monkeys.length !== 5 || lizards.length !== 4 ||
+        snakes.length !== 6 || spiders.length !== 3)
+      throw new Error('M26: an animal population count changed');
+    if (sharks.length < 1) throw new Error('M26: the shark population changed');
+    if (animals.length !== 10) throw new Error('M26: the registry must still hold 10 species');
+  }
+
 }
 `;
 const file = join(here, '.game-smoke.mjs');

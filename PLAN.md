@@ -148,7 +148,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M23** ✅ | Audio pass | Island, weather, animals and survival actions have coherent audio feedback |
 | **M24** ✅ | Performance pass: instancing, LOD, profiling | Stable target performance with full island systems active |
 | **M25** ✅ | Save/load + respawn/recovery | Progress survives reload and failure states recover correctly |
-| **M26** | Single-player v1 integration/polish | Complete single-player game passes end-to-end playthrough |
+| **M26** ✅ | Single-player v1 integration/polish | Complete single-player game passes end-to-end playthrough |
 | **M27** | ServerBase `VibeSurvivorsPlugin` scaffold + protocol | Plugin builds and client can connect with `?mp=host:port` |
 | **M28** | Multiplayer player presence + movement | 3 tabs see the same connected players |
 | **M29** | Shared deterministic world state | 3 tabs converge on the same island/world state |
