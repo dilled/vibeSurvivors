@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [weather, rain, fire, plants, schedule, determinism]
 created: "2026-10-17T19:40:47"
-updated: "2026-10-17T19:41:44"
+updated: "2026-10-18T01:39:41"
 ---
 
 <!-- compiled_truth -->
@@ -55,3 +55,9 @@ M10 block (after M9): schedule determinism by replaying the generation draw orde
   kind: decision
   summary: "M10 shipped: weather keyed on elapsed gameMin (seed 271, lazy segments, interval lookups), forced debug override never rewrites segs, rain douses unsheltered fires (shelter r2.0, torches rain-proof, cook item stays raw), plantGrowthMult is a rain-weighted range average over (RAIN_GROWTH 1.5), sky/fog/sun/streak/HUD blend at ~1s (dt*3), smoke pins weather clear before M10 blocks"
   affects: [m10-weather-framework]
+
+- time: 2026-10-18T01:39:41
+  kind: note
+  summary: "The rain audio deferred to M23 has shipped: rain bed tracks weather.vis.rain in the [[m23-audio]] read-only tick (commit 4bb4e83)."
+  source: commit 4bb4e83
+  affects: [m23-audio]

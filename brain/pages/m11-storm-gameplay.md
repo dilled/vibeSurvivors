@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [weather, storm, lightning, wet, fire, animals, schedule, determinism]
 created: "2026-10-17T20:23:47"
-updated: "2026-10-17T20:24:29"
+updated: "2026-10-18T01:39:41"
 ---
 
 <!-- compiled_truth -->
@@ -42,3 +42,9 @@ M11 makes the storm a real survival event, not a visual: a fourth weather state 
   summary: "Created: M11 ‒ Storm gameplay: 'storm' weather state appended to M10's data-driven schedule, per-segment seeded lightning fires + animal panic, wind-dropped coconuts, lagoon surge, wet stat + drying, rain-masked fire fear, ?weather=storm"
   source: "M11 implementation, commit 34a064e"
   affects: [m11-storm-gameplay]
+
+- time: 2026-10-18T01:39:41
+  kind: note
+  summary: "The storm audio deferred to M23 has shipped: storm wind bed tracks weather.vis.storm and doLightning triggers range-delayed thunder in [[m23-audio]] (commit 4bb4e83)."
+  source: commit 4bb4e83
+  affects: [m23-audio]
