@@ -3839,6 +3839,264 @@ patched += `
     stats.thirst = saveStats.thirst; stats.wet = saveStats.wet;
   }
 }
+
+/* ---- M30: multiplayer animals + gameplay event relay ---- */
+{
+  /* 1. single-player invariants: without mpApi the apply layer is inert and
+   *    the roster is the full deterministic population (slot = type*64+i) */
+  if (mpApi !== null) throw new Error('M30: mpApi leaked in from the M29 block');
+  mpAnimalsFrame(0.016);   /* must be a silent no-op (no mpApi) */
+  const roster = mpAnimalRoster();
+  const expectTotal = schools.length + crabs.length + tigers.length + gulls.length
+    + monkeys.length + lizards.length + snakes.length + pelicans.length
+    + sharks.length + spiders.length;
+  if (roster.length !== expectTotal)
+    throw new Error('M30: the roster has ' + roster.length + ' entries, expected ' + expectTotal);
+  const byType = (t) => roster.filter((r) => r.type === t);
+  if (byType(0).some((r, i) => r.slot !== i || r.isSchool !== true))
+    throw new Error('M30: fish school slots are not 0..n');
+  if (byType(1).length !== crabs.length || byType(1)[0].slot !== 64)
+    throw new Error('M30: crab slots are not 64+');
+  if (byType(2)[0].slot !== 128)
+    throw new Error('M30: the first tiger slot is not 128');
+  const collected = mpCollectAnimals();
+  if (collected.length !== expectTotal)
+    throw new Error('M30: collect count mismatch (' + collected.length + ')');
+  for (const a of collected)
+    if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(a.z) || !Number.isFinite(a.yaw))
+      throw new Error('M30: a collected animal has a non-finite transform');
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+  let __tt10 = 2e8;
+  const pump = (n) => { for (let i = 0; i < n; i++) { const cb = globalThis.__rafCb; globalThis.__rafCb = null; __tt10 += 16.7; globalThis.__audioTime += 0.0167; if (cb) cb(__tt10); } };
+
+  /* snapshot every animal the block can touch */
+  const saveAnimals = [];
+  for (const sp of animals)
+    for (const e of sp.pop) {
+      const rec = { x: e.x, z: e.z, dir: e.dir, n: e.n, alive: e.alive };
+      if (e.mesh) rec.meshCount = e.mesh.count;
+      if (e.grp) { rec.gx = e.grp.position.x; rec.gz = e.grp.position.z;
+        rec.ry = e.grp.rotation.y; rec.vis = e.grp.visible; }
+      saveAnimals.push(rec);
+    }
+  const saveGameMin = gameMin, saveStarted = started, saveDead = dead;
+  const saveWon = won, saveOnRaft = onRaft;
+  const saveCooking = fires.map((f) => f.cooking);
+  for (const f of fires) if (typeof f.cooking === 'string') f.cooking = null;   /* M25 save-test state (M29 pattern) */
+
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    /* the page's ?mp= block wires these hooks; mirror them exactly */
+    let animalTickEntries = 0;
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M30Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+      onAnimals: (m) => { animalTickEntries += m.size; },
+    });
+    mpApi = api;
+
+    /* 2. connect + join success (publicId 110 big-endian, the M27 pattern) */
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true || api.isAuthority() !== false)
+      throw new Error('M30: the join success was not parsed / authority check wrong');
+
+    /* 3. before any tick (authority unknown): the 30 Hz loop sends state+clock
+       and NEVER a type-29 animal frame */
+    intervals[0].fn();
+    {
+      const tail = wsInstances[0].sent.slice(-2);
+      if (tail.length !== 2) throw new Error('M30: the loop sent ' + tail.length + ' frames, expected state+clock');
+      for (const d of tail)
+        if ((d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 29)
+          throw new Error('M30: a non-authority tab uploaded animals');
+    }
+
+    /* wire helpers: a tick with players (bit0) + real animals (bit2) */
+    const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
+    const head4 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
+    const buildTick = (flags, auth, tickId, players, animalsList) => {
+      const parts = [new Uint8Array([27, flags]), head4(auth)];
+      if (flags & 1) {
+        parts.push(w32(tickId), w32(players.length));
+        for (const p of players) {
+          const b = new DataView(new ArrayBuffer(21));
+          b.setUint32(0, p.id, true);
+          b.setFloat32(4, p.x, true); b.setFloat32(8, p.y, true);
+          b.setFloat32(12, p.z, true); b.setFloat32(16, p.yaw, true);
+          b.setUint8(20, p.state);
+          parts.push(new Uint8Array(b.buffer));
+        }
+      }
+      if (flags & 4) {
+        parts.push(w32(animalsList.length));
+        for (const a of animalsList) {
+          const b = new Uint8Array(24);
+          const dv = new DataView(b.buffer);
+          dv.setUint16(0, a.slot, true);
+          b[2] = a.type; b[3] = 0;
+          dv.setFloat32(4, a.x, true); dv.setFloat32(8, a.y, true);
+          dv.setFloat32(12, a.z, true); dv.setFloat32(16, a.yaw, true);
+          b[20] = a.dead ? 1 : 0;
+          parts.push(b);
+        }
+      }
+      const total = parts.reduce((s, q) => s + q.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const q of parts) { buf.set(q, off); off += q.length; }
+      return buf;
+    };
+    const sendTick = (flags, auth, tickId, players, animalsList) =>
+      wsInstances[0].onmessage({ data: buildTick(flags, auth, tickId, players, animalsList).buffer.slice(0) });
+
+    /* 4. this tab IS the authority: the 30 Hz loop appends [29][count][count*24B] */
+    sendTick(0x01, 110, 1, [{ id: 110, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], null);
+    if (api.isAuthority() !== true)
+      throw new Error('M30: the tab is not recognized as the authority');
+    gameMin = 42.75;
+    intervals[0].fn();
+    let up = wsInstances[0].sent.at(-1);
+    up = up instanceof Uint8Array ? up : new Uint8Array(up);
+    if (up[0] !== 29)
+      throw new Error('M30: the authority did not upload animals in the 30 Hz loop (got type ' + up[0] + ')');
+    const upDv = new DataView(up.buffer, up.byteOffset, up.byteLength);
+    const upCount = upDv.getUint32(1, true);
+    if (upCount !== expectTotal || up.byteLength !== 5 + upCount * 24)
+      throw new Error('M30: the animal upload size is wrong (count ' + upCount + ', len ' + up.byteLength + ')');
+    {
+      const o = 5;   /* entry 0 = first fish school (slot 0, type 0) */
+      if (upDv.getUint16(o, true) !== 0 || up[o + 2] !== 0)
+        throw new Error('M30: entry 0 slot/type are not 0/0');
+      if (!Number.isFinite(upDv.getFloat32(o + 4, true)) || !Number.isFinite(upDv.getFloat32(o + 16, true)))
+        throw new Error('M30: entry 0 transform is not finite');
+      const o1 = 5 + byType(0).length * 24;   /* first crab = slot 64, type 1 */
+      if (upDv.getUint16(o1, true) !== 64 || up[o1 + 2] !== 1)
+        throw new Error('M30: the first crab entry is not slot 64/type 1');
+    }
+
+    /* 5. this tab is a FOLLOWER: no animal uploads, and the bit-2 section
+       (between players bit0 and names bit3) populates api.animals */
+    sendTick(0x01, 111, 2, [{ id: 111, x: 3, y: 0, z: -3, yaw: 1, state: 0 }], null);
+    if (api.isAuthority() !== false)
+      throw new Error('M30: the tab must be a follower now');
+    const sentN = wsInstances[0].sent.length;
+    intervals[0].fn();
+    {
+      const tail = wsInstances[0].sent.slice(sentN);
+      if (tail.length !== 2)
+        throw new Error('M30: the follower loop sent ' + tail.length + ' frames, expected state+clock');
+      for (const d of tail)
+        if ((d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 29)
+          throw new Error('M30: a follower uploaded animals');
+    }
+
+    /* relayed snapshot: a school anchor, one LIVE tiger, one DEAD crab */
+    const crab = crabs.find((c) => c.alive && c.grp);
+    if (!crab) throw new Error('M30: no live crab to relay dead');
+    const crabSlot = 64 + crabs.indexOf(crab);
+    const t0 = tigers.find((t) => t.grp) || tigers[0];
+    const s0 = schools[0];
+    const rx = 30, rz = -20;             /* school anchor target */
+    const tx = -40, tz = 25, tyaw = 1.2;  /* live tiger target */
+    sendTick(0x05, 111, 3,
+      [{ id: 110, x: 0.5, y: 0.5, z: 0.5, yaw: 0.25, state: 0 },
+       { id: 111, x: 3, y: 0, z: -3, yaw: 1, state: 0 }],
+      [
+        { slot: 0, type: 0, x: rx, y: 0, z: rz, yaw: 0, dead: false },
+        { slot: 128, type: 2, x: tx, y: 2, z: tz, yaw: tyaw, dead: false },
+        { slot: crabSlot, type: 1, x: 0, y: 0, z: 0, yaw: 0, dead: true },
+      ]);
+    if (api.animals.size !== 3)
+      throw new Error('M30: api.animals must hold exactly the 3 relayed entries, got ' + api.animals.size);
+    const aCrab = api.animals.get(crabSlot);
+    if (!aCrab || !aCrab.dead) throw new Error('M30: the relayed dead crab was not parsed');
+    const aTiger = api.animals.get(128);
+    if (!aTiger || Math.abs(aTiger.x - tx) > 1e-6 || Math.abs(aTiger.yaw - tyaw) > 1e-6)
+      throw new Error('M30: the relayed tiger was not parsed');
+    if (animalTickEntries !== 3) throw new Error('M30: onAnimals did not fire with the snapshot');
+    if (api.remotes.has(110)) throw new Error('M30: self leaked into remotes');
+    const r111 = api.remotes.get(111);
+    if (!r111 || Math.abs(r111.x - 3) > 1e-6)
+      throw new Error('M30: the players section desynced the walk across bit2');
+
+    /* 6. mpAnimalsFrame: the relayed transforms win on the follower
+       (dead hides the mesh; live individuals + the school anchor converge) */
+    /* the relay targets sit well outside the spawn bands, so every entity
+       starts measurably far from its target (no degenerate d0 === 0) */
+    const dT0 = Math.hypot(t0.grp.position.x - tx, t0.grp.position.z - tz);
+    const dS0 = Math.hypot(s0.x - rx, s0.z - rz);
+    if (dT0 < 1 || dS0 < 1) throw new Error('M30: degenerate starting distance (tiger ' + dT0 + ', school ' + dS0 + ')');
+    for (let i = 0; i < 60; i++) mpAnimalsFrame(0.1);
+    if (crab.grp.visible !== false) throw new Error('M30: the relayed dead crab was not hidden');
+    const dT1 = Math.hypot(t0.grp.position.x - tx, t0.grp.position.z - tz);
+    if (dT1 >= dT0)
+      throw new Error('M30: the tiger grp did not move toward the relayed transform (' + dT0 + ' -> ' + dT1 + ')');
+    const dS1 = Math.hypot(s0.x - rx, s0.z - rz);
+    if (dS1 >= dS0)
+      throw new Error('M30: the school anchor did not move toward the relayed anchor');
+    if (Math.abs(s0.x - rx) > 1e-3 || Math.abs(s0.z - rz) > 1e-3)
+      throw new Error('M30: the school anchor did not converge: (' + s0.x + ', ' + s0.z + ') -> target (' + rx + ', ' + rz + ')');
+    if (Math.abs(t0.x - t0.grp.position.x) > 0.5)
+      throw new Error('M30: the tiger data field drifted from its grp after the relay');
+
+    /* 7. the frame() hook: a pumped frame with the snapshot relayed applies
+       the same layer in the real render loop without throwing */
+    started = true; dead = false; won = false; onRaft = false;
+    for (const k of ['thirst', 'hunger', 'health', 'wet'])
+      stats[k] = Math.min(100, Math.max(0, stats[k]));
+    const g0 = gameMin;
+    pump(2);
+    if (!(gameMin > g0))
+      throw new Error('M30: frame() stopped advancing the clock with the MP session open');
+
+    /* 8. back to single-player: the apply layer goes inert again */
+    api.close();
+    mpApi = null;
+    mpAnimalsFrame(0.016);
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    for (const av of mpAvatars.values()) scene.remove(av.grp);
+    mpAvatars.clear();
+    let ai = 0;
+    for (const sp of animals)
+      for (const e of sp.pop) {
+      const rec = saveAnimals[ai++];
+      e.x = rec.x; e.z = rec.z; e.dir = rec.dir; e.n = rec.n; e.alive = rec.alive;
+      if (rec.meshCount !== undefined && e.mesh) e.mesh.count = rec.meshCount;
+      if (e.grp) {
+        e.grp.position.x = rec.gx; e.grp.position.z = rec.gz;
+        e.grp.rotation.y = rec.ry; e.grp.visible = rec.vis;
+      }
+      }
+    gameMin = saveGameMin;
+    mpTimeAdopt = 0;
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+    fires.forEach((f, i) => { f.cooking = saveCooking[i]; });
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);

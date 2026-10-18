@@ -4494,6 +4494,7 @@ function frame(t) {
   updateAnimals(dt, 'late');    /* M12: tigers then gulls, after updateSky so dayFactor is fresh */
   audioTick(dt);     /* M23: bed gains + ambient cues + footsteps (read-only) */
   pt('animL');   /* M24: late animals + audio tick */
+  mpAnimalsFrame(dt);   /* M30: followers adopt the relayed animal snapshot */
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   mapDraw(dt);   /* M18: throttled redraw while the paper map is open */
@@ -4685,6 +4686,90 @@ function mpWorldLockedGuard() {
   return true;
 }
 
+/* --------------------- multiplayer animals (optional, M30) ---------------
+ * The WORLD AUTHORITY owns the animal sim (relay model, same as M29 edits):
+ * it uploads its whole roster 30 Hz (MSG_VIVS_ANIMALS, see lib/mp.js) and
+ * followers overwrite their local animals from the relayed snapshot
+ * (mpApi.animals, tick bit2). The relayed transform wins each frame; the
+ * local sim keeps running for animation. Animals are events-carrying, so
+ * converging animals = converging events. Slot = type * 64 + populationIndex
+ * (type = animal registry index): same world seed => same roster on every
+ * client, so the mapping matches without transmission. Inert without ?mp=
+ * (mpApi stays null), zero rng.
+ */
+let mpAnimalRosterCache = null;
+function mpAnimalRoster() {
+  if (mpAnimalRosterCache) return mpAnimalRosterCache;
+  const roster = [];
+  for (let type = 0; type < animals.length; type++) {
+    const sp = animals[type];
+    for (let i = 0; i < sp.pop.length; i++)
+      roster.push({ slot: type * 64 + i, type, id: sp.id, pop: sp.pop, i,
+        isSchool: sp.id === 'fish' });   /* fish schools: anchor only, no grp */
+  }
+  mpAnimalRosterCache = roster;
+  return roster;
+}
+/* Authority upload getter (wired into the ?mp= block): the current mesh
+ * transform of every individual is the single source of truth (each step()
+ * synced grp from the data fields this frame). Schools relay only their
+ * anchor (x, z); y/yaw are unused for them, dead = no fish left. */
+function mpCollectAnimals() {
+  const out = [];
+  for (const r of mpAnimalRoster()) {
+    const e = r.pop[r.i];
+    if (!e) continue;
+    if (r.isSchool) {
+      out.push({ slot: r.slot, type: r.type, x: e.x, y: 0, z: e.z, yaw: 0,
+        dead: e.n <= 0 });
+    } else {
+      if (!e.grp) continue;
+      out.push({ slot: r.slot, type: r.type, x: e.grp.position.x,
+        y: e.grp.position.y, z: e.grp.position.z, yaw: e.grp.rotation.y,
+        dead: r.id === 'crab' ? !e.alive : false });
+    }
+  }
+  return out;
+}
+/* Follower apply (called once per frame after both animal phases): the
+ * relayed snapshot overwrites local state. Data fields (x/z/dir) are nudged
+ * first so the local sim's own grp sync follows the authority, then grp is
+ * aligned directly (M28-style lerp; shortest-arc yaw). Dead relays hide the
+ * mesh but never force it visible (local hides, e.g. crabs fleeing a
+ * hunting lizard, must keep working). */
+function mpAnimalsFrame(dt) {
+  if (!mpApi || !mpApi.connected()) return;
+  if (mpApi.isAuthority()) return;     /* authority: own sim IS the truth */
+  const map = mpApi.animals;
+  if (!map || map.size === 0) return;
+  const k = 1 - Math.exp(-dt * 15);
+  for (const r of mpAnimalRoster()) {
+    const a = map.get(r.slot);
+    if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) continue;
+    const e = r.pop[r.i];
+    if (!e) continue;
+    if (r.isSchool) {
+      e.x += (a.x - e.x) * k;
+      e.z += (a.z - e.z) * k;
+      if (a.dead && e.n > 0) { e.n = 0; if (e.mesh) e.mesh.count = 0; }
+      continue;
+    }
+    if (typeof e.x === 'number') e.x += (a.x - e.x) * k;
+    if (typeof e.z === 'number') e.z += (a.z - e.z) * k;
+    if (typeof e.dir === 'number') {
+      const dd = a.yaw - e.dir;
+      e.dir += Math.atan2(Math.sin(dd), Math.cos(dd)) * k;
+    }
+    const g = e.grp;
+    if (!g) continue;
+    g.position.x += (a.x - g.position.x) * k;
+    g.position.z += (a.z - g.position.z) * k;
+    const dy = a.yaw - g.rotation.y;
+    g.rotation.y += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;
+    if (a.dead) g.visible = false;
+  }
+}
+
 /* ----------------------- multiplayer (optional, M27) -----------------------
  * Append ?mp=host:port to the URL to connect to a VibeSurvivors relay server
  * (ServerBase/VibeSurvivorsPlugin). Without it the game runs exactly as
@@ -4761,6 +4846,9 @@ function mpWorldLockedGuard() {
         if (!mpApi.authorityId || mpApi.authorityId === mpApi.publicId) return;
         mpTimeAdopt = gm;
       },
+      /* M30: the authority uploads its animal snapshot; followers apply
+         it in mpAnimalsFrame (tick bit2 -> mpApi.animals) */
+      animals: mpCollectAnimals,
     });
   }
 }
