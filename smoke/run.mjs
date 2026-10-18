@@ -3392,6 +3392,143 @@ patched += `
     globalThis.setTimeout = realSetTimeout;
   }
 }
+
+/* ---- M28: multiplayer presence renderer (avatars from mpApi.remotes) ---- */
+{
+  /* 1. the whole single-player pass above must have stayed inert */
+  if (mpApi !== null || mpAvatars.size !== 0)
+    throw new Error('M28: presence state leaked into single-player mode');
+  mpRemotesFrame(1 / 60);   /* no mpApi -> guard returns, nothing happens */
+  if (mpAvatars.size !== 0) throw new Error('M28: the guard is not inert without mpApi');
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const api = mp.attachMultiplayer({
+      rig: { position: { x: 0, y: 0, z: 0 }, rotation: { y: 0 } },
+      url: '127.0.0.1:3003', seed: 1337, displayName: 'M28Tester', inWater: () => false,
+    });
+    if (typeof api.connected !== 'function' || api.connected() !== false)
+      throw new Error('M28: connected() must be false before the join succeeds');
+    mpApi = api;   /* the page's ?mp= block does exactly this */
+
+    /* 2. connect + join success (publicId 50 big-endian, the M27 pattern) */
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 50, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 50) throw new Error('M28: join success not parsed');
+    if (api.connected() !== true) throw new Error('M28: connected() must be true after join');
+
+    /* 3. first sight of a remote snaps (never lerps from the origin) */
+    const buildTick = (flags, auth, tickId, players, editCount, animalCount, names) => {
+      const parts = [new Uint8Array([27, flags])];
+      const head = new DataView(new ArrayBuffer(4));
+      head.setUint32(0, auth, true);
+      parts.push(new Uint8Array(head.buffer));
+      const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
+      if (flags & 1) {
+        parts.push(w32(tickId), w32(players.length));
+        for (const p of players) {
+          const b = new DataView(new ArrayBuffer(21));
+          b.setUint32(0, p.id, true);
+          b.setFloat32(4, p.x, true); b.setFloat32(8, p.y, true);
+          b.setFloat32(12, p.z, true); b.setFloat32(16, p.yaw, true);
+          b.setUint8(20, p.state);
+          parts.push(new Uint8Array(b.buffer));
+        }
+      }
+      if (flags & 2) parts.push(w32(editCount), new Uint8Array(editCount * 19));
+      if (flags & 4) parts.push(w32(animalCount), new Uint8Array(animalCount * 24));
+      if (flags & 8) {
+        parts.push(w32(names.length));
+        for (const n of names) parts.push(w32(n.id), w32(n.name.length), new TextEncoder().encode(n.name));
+      }
+      const total = parts.reduce((a, p) => a + p.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const p of parts) { buf.set(p, off); off += p.length; }
+      return buf;
+    };
+    const t1 = buildTick(0x01, 50, 1,
+      [{ id: 50, x: 0, y: 0, z: 0, yaw: 0, state: 0 },
+       { id: 60, x: 5, y: 1.2, z: -6, yaw: 1.3, state: 0 }], 0, 0, []);
+    wsInstances[0].onmessage({ data: t1.buffer.slice(0) });
+    mpRemotesFrame(1 / 60);
+    if (mpAvatars.size !== 1 || !mpAvatars.has(60))
+      throw new Error('M28: first sight must create exactly one avatar (self excluded)');
+    const av = mpAvatars.get(60);
+    if (Math.abs(av.x - 5) > 1e-6 || Math.abs(av.y - 1.2) > 1e-6 || Math.abs(av.z + 6) > 1e-6)
+      throw new Error('M28: first sight must snap to the tick transform, not lerp from origin');
+    if (Math.abs(av.grp.position.x - 5) > 1e-6 || Math.abs(av.grp.position.z + 6) > 1e-6)
+      throw new Error('M28: the avatar group was not placed at the snap position');
+    if (Math.abs(av.yaw - 1.3) > 1e-6 || Math.abs(av.grp.rotation.y - 1.3) > 1e-6)
+      throw new Error('M28: first-sight yaw not snapped');
+    if (av.grp.visible !== true || !scene.children.includes(av.grp))
+      throw new Error('M28: avatar not visible/in the scene while connected');
+    if (av.sprite.visible !== false) throw new Error('M28: name tag must stay hidden until a name arrives');
+
+    /* 4. lerp toward new tick values (x converges, yaw takes the short arc),
+     *    and the name arrives in the names section after the players section */
+    const t2 = buildTick(0x0D, 50, 2, [{ id: 60, x: 6, y: 1.2, z: -6, yaw: 4.6, state: 0 }], 0, 0, [{ id: 60, name: 'Bob' }]);
+    wsInstances[0].onmessage({ data: t2.buffer.slice(0) });
+    for (let i = 0; i < 60; i++) mpRemotesFrame(1 / 60);
+    if (av.x >= 6 || av.x <= 5) throw new Error('M28: x should converge toward 6, got ' + av.x);
+    /* 4.6 - 1.3 = 3.3 rad > pi -> the shortest arc goes DOWN from 1.3 */
+    if (av.yaw >= 1.3) throw new Error('M28: yaw must lerp the shortest arc (down from 1.3), got ' + av.yaw);
+    if (av.name !== 'Bob') throw new Error('M28: the relayed name was not stored on the tag');
+    if (av.sprite.visible !== true) throw new Error('M28: name tag not shown once the name arrives');
+    if (av.tex.needsUpdate !== true) throw new Error('M28: name tag texture not flagged for update');
+
+    /* 5. a >30 u jump (rejoin) snaps instead of lerping across the island */
+    const t3 = buildTick(0x01, 50, 3, [{ id: 60, x: 60, y: 0, z: -60, yaw: 0, state: 0 }], 0, 0, []);
+    wsInstances[0].onmessage({ data: t3.buffer.slice(0) });
+    mpRemotesFrame(1 / 60);
+    if (Math.abs(av.x - 60) > 1e-6 || Math.abs(av.z + 60) > 1e-6)
+      throw new Error('M28: a >30 u jump must snap (rejoin), not lerp');
+
+    /* 6. a remote that leaves the session (absent from a tick) is removed */
+    const t4 = buildTick(0x01, 50, 4, [{ id: 50, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], 0, 0, []);
+    wsInstances[0].onmessage({ data: t4.buffer.slice(0) });
+    mpRemotesFrame(1 / 60);
+    if (mpAvatars.size !== 0) throw new Error('M28: a departed remote was not removed');
+    if (scene.children.includes(av.grp)) throw new Error('M28: the departed avatar was left in the scene');
+
+    /* 7. a disconnect hides avatars and connected() goes false */
+    const t5 = buildTick(0x01, 50, 5, [{ id: 60, x: 60, y: 0, z: -60, yaw: 0, state: 0 }], 0, 0, []);
+    wsInstances[0].onmessage({ data: t5.buffer.slice(0) });
+    mpRemotesFrame(1 / 60);
+    wsInstances[0].onclose();   /* rejoin backoff timer armed via the fake setTimeout */
+    if (api.connected() !== false) throw new Error('M28: connected() must be false after close');
+    mpRemotesFrame(1 / 60);
+    if (mpAvatars.size !== 1 || mpAvatars.get(60).grp.visible !== false)
+      throw new Error('M28: avatars must be hidden while disconnected');
+
+    api.close();
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;   /* restore single-player state for everything after */
+    for (const av of mpAvatars.values()) scene.remove(av.grp);
+    mpAvatars.clear();
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);

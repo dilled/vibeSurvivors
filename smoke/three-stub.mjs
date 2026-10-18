@@ -78,6 +78,9 @@ class Mat {
 export class MeshLambertMaterial extends Mat {}
 export class MeshBasicMaterial extends Mat {}
 export class LineBasicMaterial extends Mat {}
+export class SpriteMaterial extends Mat {}   // M28: remote-player name tags
+
+export class CanvasTexture { constructor(image) { this.image = image; this.needsUpdate = false; } }   // M28
 
 class Node {
   constructor() {
@@ -102,6 +105,7 @@ export class LOD extends Node {
 export class Mesh extends Node {
   constructor(geometry, material) { super(); this.geometry = geometry; this.material = material; }
 }
+export class Sprite extends Node { constructor(material) { super(); this.material = material; } }   // M28
 export class InstancedMesh extends Node {
   constructor(geometry, material, count) {
     super();

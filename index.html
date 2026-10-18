@@ -4419,6 +4419,7 @@ function frame(t) {
   rig.legL.rotation.x = sw; rig.legR.rotation.x = -sw;
   rig.armL.rotation.x = -sw * 0.6;
   rig.armR.rotation.x = sw * 0.6 + (spearSwing > 0 ? -Math.sin((0.35 - spearSwing) * 18) * 1.2 : 0);
+  mpRemotesFrame(dt);   /* M28: remote-player presence (null-guarded, inert single-player) */
 
   /* survival: time, stats, world sim */
   if (started && !dead) {
@@ -4482,6 +4483,89 @@ function frame(t) {
 }
 requestAnimationFrame(frame);
 
+/* ----------------------- multiplayer presence (optional, M28) -----------------------
+ * Remote players relayed by the M27 client render as boxy avatars with name
+ * tags, driven by mpApi.remotes (self excluded, ids dropped per tick). Without
+ * ?mp= mpApi stays null and everything here is inert.
+ */
+let mpApi = null;                       /* set by the ?mp= block below */
+const mpAvatars = new Map();            /* publicId -> {grp, sprite, canvas, tex, name, x, y, z, yaw} */
+const MP_AVATAR_COLORS = [0x7a8a5a, 0x8a3a2e, 0x2e6e8a, 0x8a6a2e, 0x6a2e8a,
+                          0x2e8a7a, 0x8a2e5a, 0x4a6a8a, 0x5a8a2e, 0x8a4a4a];
+const mpAvatarColor = (id) => MP_AVATAR_COLORS[(((id * 0x9E3779B1) >>> 0) % MP_AVATAR_COLORS.length)];   /* zero-rng */
+function makeMpAvatar(id) {
+  const grp = new THREE.Group();
+  const skin = new THREE.MeshLambertMaterial({ color: 0xd9a67c });
+  const shirt = new THREE.MeshLambertMaterial({ color: mpAvatarColor(id) });
+  const pants = new THREE.MeshLambertMaterial({ color: 0x4a5568 });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.32), shirt); torso.position.y = 1.15;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skin); head.position.y = 1.72;
+  const legGeo = new THREE.BoxGeometry(0.22, 0.75, 0.26);
+  const legL = new THREE.Mesh(legGeo, pants); legL.position.set(-0.14, 0.375, 0);
+  const legR = new THREE.Mesh(legGeo, pants); legR.position.set(0.14, 0.375, 0);
+  const armGeo = new THREE.BoxGeometry(0.18, 0.66, 0.2);
+  const armL = new THREE.Mesh(armGeo, shirt); armL.position.set(-0.38, 1.32, 0);
+  const armR = new THREE.Mesh(armGeo, shirt); armR.position.set(0.38, 1.32, 0);
+  grp.add(torso, head, legL, legR, armL, armR);
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 48;
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  sprite.position.y = 2.45;
+  sprite.scale.set(1.8, 0.32, 1);
+  sprite.visible = false;                       /* shown once a name arrives */
+  grp.add(sprite);
+  return { grp, sprite, canvas, tex, name: null, x: 0, y: 0, z: 0, yaw: 0 };
+}
+function drawMpNameTag(av, text) {
+  av.name = text;
+  const ctx = av.canvas.getContext('2d');
+  ctx.clearRect(0, 0, 256, 48);
+  ctx.font = '26px monospace';
+  const w = ctx.measureText(text).width;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect((256 - w - 16) / 2, 0, w + 16, 48);
+  ctx.fillStyle = '#e8f0e0';
+  ctx.fillText(text, (256 - w) / 2, 34);
+  av.tex.needsUpdate = true;                    /* only redrawn on name change */
+}
+function mpRemotesFrame(dt) {
+  if (!mpApi) return;                           /* single-player: inert */
+  const connected = mpApi.connected();
+  for (const [id, av] of mpAvatars) {
+    av.grp.visible = connected;                 /* hide all while disconnected */
+    if (connected && !mpApi.remotes.has(id)) {  /* departed: drop the avatar */
+      scene.remove(av.grp);
+      mpAvatars.delete(id);
+    }
+  }
+  if (!connected) return;
+  for (const [id, p] of mpApi.remotes) {
+    let av = mpAvatars.get(id);
+    if (!av) {                                  /* first sight: snap, never lerp from origin */
+      av = makeMpAvatar(id);
+      av.x = p.x; av.y = p.y; av.z = p.z; av.yaw = p.yaw;
+      scene.add(av.grp);
+      mpAvatars.set(id, av);
+    } else {
+      const dx = p.x - av.x, dy = p.y - av.y, dz = p.z - av.z;
+      if (dx * dx + dy * dy + dz * dz > 900) {  /* >30 u jump (rejoin): snap */
+        av.x = p.x; av.y = p.y; av.z = p.z;
+      } else {
+        const k = 1 - Math.exp(-dt * 15);
+        av.x += dx * k; av.y += dy * k; av.z += dz * k;
+        let d = p.yaw - av.yaw;
+        d = Math.atan2(Math.sin(d), Math.cos(d));   /* shortest arc, no long-way spins */
+        av.yaw += d * k;
+      }
+    }
+    av.grp.position.set(av.x, av.y, av.z);
+    av.grp.rotation.y = av.yaw;
+    if (p.name && p.name !== av.name) drawMpNameTag(av, p.name);   /* names arrive after players */
+    av.sprite.visible = !!p.name;
+  }
+}
+
 /* ----------------------- multiplayer (optional, M27) -----------------------
  * Append ?mp=host:port to the URL to connect to a VibeSurvivors relay server
  * (ServerBase/VibeSurvivorsPlugin). Without it the game runs exactly as
@@ -4537,7 +4621,7 @@ requestAnimationFrame(frame);
       });
     };
     const mp = await import('./lib/mp.js');
-    mp.attachMultiplayer({
+    mpApi = mp.attachMultiplayer({   /* M28: presence rendering reads mpApi.remotes */
       rig, url: mpUrl, seed: SEED,
       displayName: await askMpName(),
       inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
