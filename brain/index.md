@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-18T00:04:38.856Z._
+_Auto-generated. Last updated 2026-10-18T00:23:53.356Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -15,6 +15,7 @@ _Auto-generated. Last updated 2026-10-18T00:04:38.856Z._
 - [m18-paper-map-system](pages/m18-paper-map-system.md) — category: decision | tags: [m18, map, ui] | M18 = the paper map system. Scope: the player can navigate using an in-world paper map (PLAN.md M18 row).
 - [m19-journal-discoveries](pages/m19-journal-discoveries.md) — category: decision | tags: [m19, journal, ui, discovery] | M19 = journal + discoveries. Scope: plants, animals and discoveries are recorded through gameplay (PLAN.md M19 row).
 - [m2-camp-system](pages/m2-camp-system.md) — category: decision | tags: [camp, building, shelter, bed, respawn] | ## What shipped (M2 — camp build spot + simple structure placement)
+- [m20-raft-construction](pages/m20-raft-construction.md) — category: decision | tags: [m20, raft, crafting, camp, inventory] | M20 = raft construction system: the complete gather/craft/build path for the winning raft (PLAN.md M20: "Player can gather/build all require
 - [m3-camp-fence-light](pages/m3-camp-fence-light.md) — category: decision | tags: [camp, fence, torch, light] | ## What shipped (M3 — fence + camp light/fire integration)
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
 - [m5-tiger](pages/m5-tiger.md) — category: decision | tags: [tiger, night, predator, threat] | ## What shipped (M5 — first tiger)
