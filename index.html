@@ -80,6 +80,7 @@
     <div class="row"><span>eat &mdash; coconut / fish / crab / egg / foraged</span><b>C &middot; F &middot; V &middot; Q</b></div>
     <div class="row"><span>make fire / make spear</span><b>G &middot; B</b></div>
     <div class="row"><span>make camp &middot; shelter / bed / fence / torch</span><b>H &middot; J &middot; K &middot; L &middot; N</b></div>
+    <div class="row"><span>twist rope / build the raft</span><b>U &middot; O</b></div>
     <div class="row"><span>spear fish</span><b>X</b></div>
     <div class="row"><span>keep the fish from a hovering pelican</span><b>Space</b></div>
     <div class="row"><span>skip time</span><b>T &middot; 1 dawn / 2 noon / 3 dusk / 4 midnight</b></div>
@@ -706,6 +707,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyZ') actSleep();
   if (e.code === 'KeyY') toggleMap();   /* M18: open/close the paper map */
   if (e.code === 'KeyI') toggleJournal();   /* M19: open/close the field journal */
+  if (e.code === 'KeyU') actCraftRope();   /* M20: twist rope from fiber */
+  if (e.code === 'KeyO') actBuildRaft();   /* M20: build the raft at camp */
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -715,7 +718,8 @@ const stats = { thirst: 100, hunger: 100, health: 100, wet: 0 };   /* M11: wet (
 const INV = { coconut: 0, fishRaw: 0, fishCooked: 0, crab: 0, crabCooked: 0, fiber: 0,
               sweetpotato: 0, sweetpotatoCooked: 0, yam: 0, yamCooked: 0, banana: 0, wildberry: 0,
               poisonberry: 0, poisonfern: 0, poisonyam: 0, herb: 0,
-              gullEgg: 0, gullEggCooked: 0 };   /* M14: gull nest eggs */
+              gullEgg: 0, gullEggCooked: 0,   /* M14: gull nest eggs */
+              wood: 0, rope: 0 };            /* M20: raft construction */
 let dead = false, spear = false;
 let drinkCd = 0, strikeCd = 0, spearSwing = 0, runT = 0;
 
@@ -1185,6 +1189,7 @@ function updateTigers(dt) {
           INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
           INV.herb = 0;
           INV.gullEgg = INV.gullEggCooked = 0;   /* M14 */
+          INV.wood = INV.rope = 0;               /* M20 */
           infectedWound = true;
           learn('infection', 'tiger wounds fester \u2014 a healing herb will close them');
           toast('\u2620\uFE0F your wounds fester \u2014 find a healing herb (M)');
@@ -2621,9 +2626,11 @@ const PLANT_CATALOG = Object.keys(PLANT_TYPES).filter((k) => PLANT_TYPES[k].lear
 const ANIMAL_CATALOG = ['fish', 'crab', 'tiger', 'gull', 'monkey', 'lizard', 'snake', 'pelican', 'shark', 'spider']
   .map((id) => 'see-' + id);
 const WEATHER_CATALOG = ['weather', 'storm', 'lightning', 'wind', 'wet', 'lagoon'];
+const SURVIVAL_CATALOG = ['rope', 'raft', 'wood'];   /* M20 */
 const JOURNAL_CATS = [['plants', 'Plants'], ['animals', 'Animals'], ['weather', 'Weather'], ['survival', 'Survival']];
 function undiscoveredCount(cat) {
-  const keys = cat === 'plants' ? PLANT_CATALOG : cat === 'animals' ? ANIMAL_CATALOG : cat === 'weather' ? WEATHER_CATALOG : null;
+  const keys = cat === 'plants' ? PLANT_CATALOG : cat === 'animals' ? ANIMAL_CATALOG
+    : cat === 'weather' ? WEATHER_CATALOG : cat === 'survival' ? SURVIVAL_CATALOG : null;
   if (!keys) return 0;
   let n = 0;
   for (const k of keys) if (!learned.has(k)) n++;
@@ -2751,7 +2758,7 @@ function makeCamp(x, z) {
   grp.add(pole, flag);
   scene.add(grp);
   camp = { x, z, g, rot: rig.rotation.y, grp, flag,
-           structures: { shelter: null, bed: null, fence: null, torch: null } };
+           structures: { shelter: null, bed: null, fence: null, torch: null, raft: null } };   /* M20 */
   return camp;
 }
 
@@ -2780,6 +2787,44 @@ function buildShelterMesh(px, py, pz, ry) {
   const postL = new THREE.Mesh(postGeo, frame); postL.position.set(-1.5, 1, -1.0);
   const postR = new THREE.Mesh(postGeo, frame); postR.position.set(1.5, 1, -1.0);
   grp.add(postL, postR);
+  scene.add(grp);
+  return grp;
+}
+
+/* M20: raft ‒ a low deck of palm planks on outrigger floats, lashed with
+   fiber rope. Placed by the camp (O); M21 takes it to open water. */
+function buildRaftMesh(px, py, pz, ry) {
+  const grp = new THREE.Group();
+  grp.position.set(px, py, pz);
+  grp.rotation.y = ry;
+  const frame = new THREE.MeshLambertMaterial({ color: 0x6e4f33 });
+  const plank = new THREE.MeshLambertMaterial({ color: 0x8a6a40 });
+  const floatM = new THREE.MeshLambertMaterial({ color: 0x7a5b3a });
+  const lash = new THREE.MeshLambertMaterial({ color: 0x9a8a52 });
+  /* two outrigger floats */
+  for (const sx of [-0.85, 0.85]) {
+    const f = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.5, 2.6), floatM);
+    f.position.set(sx, 0.25, 0);
+    grp.add(f);
+  }
+  /* deck: planks lashed across the floats */
+  for (let i = 0; i < 4; i++) {
+    const d = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.08, 0.55), plank);
+    d.position.set(0, 0.56, -0.825 + i * 0.55);
+    grp.add(d);
+  }
+  /* fiber lashings: a band around the floats at each end + a stern post */
+  for (const zz of [-1.15, 1.15]) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.06, 0.08), lash);
+    b.position.set(0, 0.32, zz);
+    grp.add(b);
+  }
+  const postGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.45, 4);
+  for (const sx of [-0.8, 0.8]) {
+    const post = new THREE.Mesh(postGeo, frame);
+    post.position.set(sx, 0.85, -1.2);
+    grp.add(post);
+  }
   scene.add(grp);
   return grp;
 }
@@ -2813,6 +2858,8 @@ function campOffsets(type) {
     ? { x: camp.x + rx * 2.6, z: camp.z + rz * 2.6 }
     : type === 'torch'
     ? { x: camp.x - rx * 2.0, z: camp.z - rz * 2.0 }   /* left of centre */
+    : type === 'raft'
+    ? { x: camp.x + fx * 3.0, z: camp.z + fz * 3.0 }   /* M20: forward, inside the fence ring */
     : { x: camp.x + fx * 2.4, z: camp.z + fz * 2.4 };
 }
 
@@ -2941,12 +2988,18 @@ function actUse() {
     }
     return;
   }
-  /* 4. shake a palm */
-  const p = palms.find((p) => p.cocos > 0 && Math.hypot(p.x - x, p.z - z) < 3.5);
+  /* 4. shake a palm: drop a coconut, or gather wood from a spent palm (M20) */
+  const p = palms.find((p) => Math.hypot(p.x - x, p.z - z) < 3.5);
   if (p) {
-    dropCoconut(p);   /* M11: shared with the storm wind */
-    learn('coco', 'coconuts: shake the palm, eat when you are thirsty');
-    toast('\u{1F965} a coconut tumbles down');
+    if (p.cocos > 0) {
+      dropCoconut(p);   /* M11: shared with the storm wind */
+      learn('coco', 'coconuts: shake the palm, eat when you are thirsty');
+      toast('\u{1F965} a coconut tumbles down');
+    } else {
+      INV.wood++;
+      learn('wood', 'palm wood: a spent palm still drops straight poles when you shake it');
+      toast('\u{1FA95} +1 palm wood');
+    }
     return;
   }
   /* 5. catch a crab (slowly \u2014 sprinting makes them scuttle) */
@@ -3132,6 +3185,42 @@ function actCraftSpear() {
   logLine('you make a spear \u2014 a driftwood stick, a palm-fibre knot, a stone point', 'survival');
   toast('\u2694\uFE0F spear in hand');
 }
+/* M20: rope + raft construction. rope = 3 fiber, U (anywhere); the raft =
+   8 wood + 4 rope, O at camp ‒ the last build before the escape (M21). */
+const RAFT_WOOD = 8, RAFT_ROPE = 4, ROPE_FIBER = 3;
+function actCraftRope() {
+  if (dead) return;
+  if (INV.fiber < ROPE_FIBER) {
+    toast('not enough fiber \u2014 E harvests the tufts (' + INV.fiber + '/' + ROPE_FIBER + ')');
+    return;
+  }
+  INV.fiber -= ROPE_FIBER;
+  INV.rope++;
+  learn('rope', 'rope: tough palm fiber twisted tight \u2014 U');
+  toast('\u{1FAA2} rope twisted (\u{1FAA2} ' + INV.rope + ')');
+}
+function actBuildRaft() {
+  if (dead) return;
+  if (!camp) { toast('establish a camp first \u2014 H'); return; }
+  if (camp.structures.raft) { toast('the raft is already built'); return; }
+  if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
+    toast('build by your camp \u2014 it is over there');
+    return;
+  }
+  if (INV.wood < RAFT_WOOD || INV.rope < RAFT_ROPE) {
+    toast('the raft needs ' + RAFT_WOOD + ' wood and ' + RAFT_ROPE + ' rope (have ' +
+      INV.wood + ' wood, ' + INV.rope + ' rope)');
+    return;
+  }
+  INV.wood -= RAFT_WOOD;
+  INV.rope -= RAFT_ROPE;
+  const o = campOffsets('raft');
+  camp.structures.raft = buildRaftMesh(o.x, heightAt(o.x, o.z), o.z,
+    Math.atan2(camp.x - o.x, camp.z - o.z));
+  learn('raft', 'raft: lashed palm poles on outrigger floats \u2014 O \u2014 the way off this island');
+  logLine('you lash a raft together', 'survival');
+  toast('\u{1F6A3} raft built \u2014 the way off this island');
+}
 function eatCoconut() {
   if (dead) return;
   if (INV.coconut <= 0) { toast('no coconut to eat'); return; }
@@ -3255,6 +3344,7 @@ function respawn() {
   INV.poisonberry = INV.poisonfern = INV.poisonyam = 0;
   INV.herb = 0;
   INV.gullEgg = INV.gullEggCooked = 0;   /* M14 */
+  INV.wood = INV.rope = 0;               /* M20 */
   poisonDrain = null;
   infectedWound = false;
   if (camp) {
@@ -3286,8 +3376,9 @@ function contextHint() {
     return 'E \u2014 drink';
   if (crabs.some((c) => c.alive && Math.hypot(c.x - x, c.z - z) < 1.5))
     return 'E \u2014 catch the crab (walk slowly!)';
-  if (palms.some((p) => p.cocos > 0 && Math.hypot(p.x - x, p.z - z) < 3.5))
-    return 'E \u2014 shake the palm';
+  const nearPalm = palms.find((p) => Math.hypot(p.x - x, p.z - z) < 3.5);   /* M20 */
+  if (nearPalm)
+    return nearPalm.cocos > 0 ? 'E \u2014 shake the palm' : 'E \u2014 shake the spent palm (wood)';
   if (plants.some((p) => p.state === 'ready' && PLANT_TYPES[p.type].drop &&
     Math.hypot(p.x - x, p.z - z) < 1.5))
     return 'E \u2014 harvest';
@@ -3302,6 +3393,12 @@ function contextHint() {
     if (missing.length) return missing.join('  \u00B7  ');
     if (camp.structures.bed && campIsLit() && dayFactor < 0.25)
       return 'Z \u2014 sleep until dawn';
+    if (!camp.structures.raft) {   /* M20: last build, after the sleep hint */
+      if (INV.fiber >= ROPE_FIBER && INV.rope < RAFT_ROPE)
+        missing.push('U \u2014 twist rope (' + INV.fiber + ' fiber)');
+      missing.push('O \u2014 build the raft');
+      return missing.join('  \u00B7  ');
+    }
   }
   if (spear && h < 0.6 && schools.some((s) => s.n > 0 && Math.hypot(s.x - x, s.z - z) < 5))
     return 'X \u2014 spear the school';
@@ -3618,7 +3715,7 @@ function updateSky(dt) {
   const phase = dayFactor > 0.85 ? 'day' : dayFactor > 0.25 ? 'dusk' : 'night';
   const bar = (v) => { const f = Math.round(v / 10); return '█'.repeat(f) + '░'.repeat(10 - f); };
   const campLine = camp
-    ? 'camp \u2014 ' + (['fence', 'shelter', 'bed', 'torch'].filter((t) => camp.structures[t]).join(' \u00B7 ') || 'empty ground')
+    ? 'camp \u2014 ' + (['fence', 'shelter', 'bed', 'torch', 'raft'].filter((t) => camp.structures[t]).join(' \u00B7 ') || 'empty ground')   /* M20 */
       + (campIsLit() ? ' \u00B7 \u{1F525}lit' : '')
     : 'no camp \u2014 H on flat dry land';
   const wst = weather.forced || weatherStateAt(gameMin);
@@ -3629,7 +3726,7 @@ function updateSky(dt) {
             `🍖 ${bar(stats.hunger)} ${String(stats.hunger | 0).padStart(3, ' ')}\n` +
             `❤️ ${bar(stats.health)} ${String(stats.health | 0).padStart(3, ' ')}\n` +
             `\u261E ${bar(stats.wet)} ${String(stats.wet | 0).padStart(3, ' ')}\n` +
-            `🥥 ${INV.coconut}   🌾 ${INV.fiber}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c   🥚 ${INV.gullEgg}r/${INV.gullEggCooked}c\n` +
+            `🥥 ${INV.coconut}   🌾 ${INV.fiber}   \u{1FA95} ${INV.wood}   \u{1FAA2} ${INV.rope}   🐟 ${INV.fishRaw}r/${INV.fishCooked}c   🦀 ${INV.crab}r/${INV.crabCooked}c   🥚 ${INV.gullEgg}r/${INV.gullEggCooked}c\n` +
             `🍠 ${INV.sweetpotato}r/${INV.sweetpotatoCooked}c   🍌 ${INV.banana}   🫐 ${INV.wildberry}   🌱 ${INV.yam}r/${INV.yamCooked}c   ☠ ${INV.poisonberry + INV.poisonfern + INV.poisonyam}   ✨ ${INV.herb}\n` +
             `⛺🛖 ${campLine}\n` +
             `seed ${SEED}`;

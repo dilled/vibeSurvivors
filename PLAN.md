@@ -142,7 +142,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M17** ✅ | Animal ecosystem integration + balancing | All 10 species coexist without obvious broken behaviour |
 | **M18** ✅ | Paper map system | Player can navigate using an in-world paper map |
 | **M19** ✅ | Journal + discoveries | Plants, animals and discoveries are recorded through gameplay |
-| **M20** | Raft construction system | Player can gather/build all required raft components |
+| **M20** ✅ | Raft construction system | Player can gather/build all required raft components |
 | **M21** | Escape/win sequence | Completed raft provides a working game ending |
 | **M22** | Endless mode + adaptation/escalating pressure | Game can continue meaningfully after normal progression |
 | **M23** | Audio pass | Island, weather, animals and survival actions have coherent audio feedback |

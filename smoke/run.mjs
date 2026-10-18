@@ -2164,6 +2164,85 @@ patched += `
     if (journalOpen) throw new Error('M19: the journal should be left closed');
     if (animals.length !== 10) throw new Error('M19: the registry must still hold 10 species: ' + animals.length);
   }
+
+  /* ---- M20: raft construction (wood -> rope -> raft) ---- */
+  {
+    const park = (x, z) => rig.position.set(x, Math.max(heightAt(x, z), WATER - 0.25), z);
+    const learnedSnap = new Set(learned);
+    const journalSnap = journal.slice();
+    const invSnap = { ...INV };
+    const raftSnap = camp.structures.raft;
+    const clearOf = (x, z) =>
+      items.every((i) => i.taken || Math.hypot(i.x - x, i.z - z) > 2) &&
+      fires.every((f) => Math.hypot(f.x - x, f.z - z) > 3);
+
+    // 1. a spent palm gives wood on E (pure inventory counter, no new entity)
+    const dryPalm = palms.find((p) => heightAt(p.x, p.z) > 0.35 && clearOf(p.x, p.z));
+    if (!dryPalm) throw new Error('M20: no dry palm site for the wood test');
+    const cocos0 = dryPalm.cocos;
+    dryPalm.cocos = 0;
+    const wood0 = INV.wood;
+    park(dryPalm.x, dryPalm.z);
+    actUse();
+    if (INV.wood !== wood0 + 1) throw new Error('M20: the spent palm should yield 1 wood: ' + INV.wood);
+    if (!learned.has('wood')) throw new Error('M20: the wood journal entry is missing');
+    if (dryPalm.cocos !== 0) throw new Error('M20: the wood path must not touch coconuts');
+    dryPalm.cocos = cocos0;
+
+    // 2. coconut palms still drop coconuts (the old path is intact)
+    const cocoPalm = palms.find((p) => p.cocos > 0 && heightAt(p.x, p.z) > 0.35 && clearOf(p.x, p.z));
+    if (!cocoPalm) throw new Error('M20: no coconut palm site for the regression check');
+    const drops0 = items.length, cocos1 = cocoPalm.cocos;
+    park(cocoPalm.x, cocoPalm.z);
+    actUse();
+    if (cocoPalm.cocos !== cocos1 - 1) throw new Error('M20: a coconut palm must still drop a coconut');
+    if (items.length !== drops0 + 1) throw new Error('M20: the coconut item must enter the world');
+    const drop = items[items.length - 1];
+    drop.taken = true;
+    scene.remove(drop.mesh);
+    items.pop();
+    if (INV.wood !== wood0 + 1) throw new Error('M20: the coconut path must not grant wood');
+
+    // 3. rope: 3 fiber -> 1 rope (U, anywhere), guarded on fiber
+    const rope0 = INV.rope;
+    INV.fiber = ROPE_FIBER;
+    actCraftRope();
+    if (INV.fiber !== 0 || INV.rope !== rope0 + 1)
+      throw new Error('M20: rope craft should consume 3 fiber: ' + INV.fiber + '/' + INV.rope);
+    if (!learned.has('rope')) throw new Error('M20: the rope journal entry is missing');
+    actCraftRope();   // 0 fiber: no-op
+    if (INV.rope !== rope0 + 1) throw new Error('M20: crafting at 0 fiber must be a no-op');
+
+    // 4. raft: 8 wood + 4 rope at camp (O)
+    if (!camp) throw new Error('M20: the M2 camp should still exist');
+    if (raftSnap) { scene.remove(raftSnap); camp.structures.raft = null; }
+    INV.wood = RAFT_WOOD; INV.rope = RAFT_ROPE;
+    park(camp.x, camp.z);
+    actBuildRaft();
+    if (!camp.structures.raft) throw new Error('M20: the raft should be built');
+    if (INV.wood !== 0 || INV.rope !== 0) throw new Error('M20: the recipe must be consumed');
+    if (!learned.has('raft')) throw new Error('M20: the raft journal entry is missing');
+    if (!journal.some((e) => e.cat === 'survival' && e.msg.indexOf('raft') >= 0))
+      throw new Error('M20: the raft build should log a journal line');
+    const raftRef = camp.structures.raft;
+    actBuildRaft();
+    if (camp.structures.raft !== raftRef) throw new Error('M20: the raft should not build twice');
+    camp.structures.raft = null;
+    scene.remove(raftRef);
+    INV.wood = RAFT_WOOD - 1; INV.rope = RAFT_ROPE;
+    actBuildRaft();
+    if (camp.structures.raft) throw new Error('M20: a short recipe must not build the raft');
+    if (INV.wood !== RAFT_WOOD - 1) throw new Error('M20: a failed build must not consume wood');
+
+    // leave a clean state (M20)
+    camp.structures.raft = raftSnap;
+    for (const k in INV) INV[k] = invSnap[k];
+    for (const k of learned) if (!learnedSnap.has(k)) learned.delete(k);
+    for (const k of learnedSnap) learned.add(k);
+    journal.length = 0; journal.push(...journalSnap);
+    park(spawn.x, spawn.z);
+    if (animals.length !== 10) throw new Error('M20: the registry must still hold 10 species: ' + animals.length);
+  }
 }
 `;
 const file = join(here, '.game-smoke.mjs');
