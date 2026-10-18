@@ -4097,6 +4097,300 @@ patched += `
     fires.forEach((f, i) => { f.cooking = saveCooking[i]; });
   }
 }
+
+/* ---- M31: multiplayer reconnect hardening (uplink resume + catch-up) ---- */
+{
+  /* 1. invariants: no MP state leaked in from the M30 block */
+  if (mpApi !== null) throw new Error('M31: mpApi leaked in from the M30 block');
+  if (mpTimeAdopt !== 0) throw new Error('M31: mpTimeAdopt leaked in from the M30 block');
+  mpAnimalsFrame(0.016);   /* silent no-op without mpApi */
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+  let __tt11 = 3e8;   /* far past every earlier block's lastT (negative-dt guard) */
+  const pump = (n) => { for (let i = 0; i < n; i++) { const cb = globalThis.__rafCb; globalThis.__rafCb = null; __tt11 += 16.7; globalThis.__audioTime += 0.0167; if (cb) cb(__tt11); } };
+
+  /* snapshot everything the block can touch (M29 + M30 union) */
+  const savePalms = palms.map((q) => q.cocos);
+  const savePlants = plants.map((q) => ({ chargesLeft: q.chargesLeft, state: q.state, min: q.min, wear: q.wear }));
+  const saveCamp = camp;
+  if (saveCamp && saveCamp.grp) scene.remove(saveCamp.grp);   /* the story camp may stand */
+  camp = null;
+  const saveGameMin = gameMin;
+  const saveStarted = started, saveDead = dead, saveWon = won, saveOnRaft = onRaft;
+  const saveItems = items.length, saveTorches = torchLights.length;
+  const saveStats = { health: stats.health, hunger: stats.hunger, thirst: stats.thirst, wet: stats.wet };
+  const saveCooking = fires.map((f) => f.cooking);
+  for (const f of fires) if (typeof f.cooking === 'string') f.cooking = null;
+  const saveAnimals = [];
+  for (const sp of animals)
+    for (const e of sp.pop) {
+      const rec = { x: e.x, z: e.z, dir: e.dir, n: e.n, alive: e.alive };
+      if (e.mesh) rec.meshCount = e.mesh.count;
+      if (e.grp) { rec.gx = e.grp.position.x; rec.gz = e.grp.position.z;
+        rec.ry = e.grp.rotation.y; rec.vis = e.grp.visible; }
+      saveAnimals.push(rec);
+    }
+  const expectTotal = schools.length + crabs.length + tigers.length + gulls.length
+    + monkeys.length + lizards.length + snakes.length + pelicans.length
+    + sharks.length + spiders.length;
+  const palmIdx = palms.findIndex((q) => q.cocos === 2);
+  if (palmIdx < 0) throw new Error('M31: no palm with 2 coconuts to harvest');
+  const p0 = palms[palmIdx];
+  const pl = plants.find((q) => q.state === 'ready' && q.chargesLeft > 1);
+  if (!pl) throw new Error('M31: no ready plant with charges left to harvest');
+  const plIdx = plants.indexOf(pl);
+  const plTarget = pl.chargesLeft - 1;
+
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    /* mirror the page's ?mp= block hooks exactly */
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M31Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+      onEdit: (pid, eidx, kind, action, payload) => {
+        if (pid === api.publicId) return;
+        mpApplyWorldEdit(kind, eidx, payload);
+      },
+      onEditSync: (pid, eidx, kind, action, payload) => {
+        if (pid === api.publicId) return;
+        mpApplyWorldEdit(kind, eidx, payload);
+      },
+      onTime: (gm) => {
+        if (!Number.isFinite(gm)) return;
+        if (!api.authorityId || api.authorityId === api.publicId) return;
+        mpTimeAdopt = gm;
+      },
+    });
+    mpApi = api;
+
+    /* 2. connect + join success (publicId 120, the M27 pattern); a tick makes
+       this tab a FOLLOWER of id 121 */
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 120, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 120 || api.connected() !== true)
+      throw new Error('M31: the join success was not parsed');
+    const buildEdit = (pid, eidx, kind, payload) => {
+      const b = new Uint8Array(23);
+      const dv = new DataView(b.buffer);
+      dv.setUint32(0, pid, true);
+      dv.setUint32(4, eidx, true);
+      b[8] = kind; b[9] = 0;
+      if (payload) b.set(payload.subarray(0, 12), 10);
+      return b;
+    };
+    const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
+    const buildTick = (flags, auth, tickId, players, time) => {
+      const parts = [new Uint8Array([27, flags])];
+      const head = new DataView(new ArrayBuffer(4));
+      head.setUint32(0, auth, true);
+      parts.push(new Uint8Array(head.buffer));
+      if (flags & 1) {
+        parts.push(w32(tickId), w32(players.length));
+        for (const p of players) {
+          const b = new DataView(new ArrayBuffer(21));
+          b.setUint32(0, p.id, true);
+          b.setFloat32(4, p.x, true); b.setFloat32(8, p.y, true);
+          b.setFloat32(12, p.z, true); b.setFloat32(16, p.yaw, true);
+          b.setUint8(20, p.state);
+          parts.push(new Uint8Array(b.buffer));
+        }
+      }
+      if ((flags & 16) && time !== null) {
+        const b = new DataView(new ArrayBuffer(4));
+        b.setFloat32(0, time, true);
+        parts.push(new Uint8Array(b.buffer));
+      }
+      const total = parts.reduce((s, q) => s + q.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const q of parts) { buf.set(q, off); off += q.length; }
+      return buf;
+    };
+    const sendTick = (flags, auth, tickId, players, time) =>
+      wsInstances[wsInstances.length - 1].onmessage(
+        { data: buildTick(flags, auth, tickId, players, time).buffer.slice(0) });
+    const PLAYER_120 = { id: 120, x: 0.5, y: 0, z: -0.5, yaw: 0.25, state: 0 };
+    const PLAYER_121 = { id: 121, x: 3.5, y: 0, z: -3.5, yaw: 1.1, state: 0 };
+    sendTick(0x01, 121, 1, [PLAYER_120, PLAYER_121], null);
+    if (api.authorityId !== 121 || api.isAuthority() !== false)
+      throw new Error('M31: the tab must start as a follower of 121');
+    if (mpWorldLocked() !== true) throw new Error('M31: the follower lock must be on');
+    {
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const tail = wsInstances[0].sent.slice(sentN);
+      if (tail.length !== 2) throw new Error('M31: the follower loop sent ' + tail.length + ' frames, expected state+clock');
+      for (const d of tail)
+        if ((d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 29)
+          throw new Error('M31: a follower uploaded animals');
+    }
+
+    /* 3. DROP + RECONNECT: the close handler cancels the uplink, the 1 s
+       backoff re-arms a fresh socket, and the M31 fix restarts the 30 Hz
+       upload after the rejoin (this is THE regression) */
+    wsInstances[0].readyState = 3;
+    wsInstances[0].onclose();
+    if (intervals[0].on !== false) throw new Error('M31: the uplink interval was not canceled on close');
+    if (timeouts.length !== 1 || timeouts[0].ms !== 1000)
+      throw new Error('M31: no 1 s reconnect backoff on close');
+    if (api.connected() !== false) throw new Error('M31: presence must hide while rejoining');
+    timeouts[0].fn();
+    if (wsInstances.length !== 2) throw new Error('M31: the reconnect did not open a fresh socket');
+    const ws2 = wsInstances[1];
+    ws2.readyState = 1;
+    ws2.onopen();
+    let j2 = ws2.sent.at(-1);
+    j2 = j2 instanceof Uint8Array ? j2 : new Uint8Array(j2);
+    if (j2[0] !== 3) throw new Error('M31: the reconnected socket did not rejoin with type 3');
+    ws2.onmessage({ data: jsBuf.buffer.slice(0) });   /* same publicId 120 on rejoin */
+    if (intervals.length !== 2 || intervals[1].on !== true || intervals[1].ms !== (1000 / 30))
+      throw new Error('M31: the 30 Hz uplink did not restart after the rejoin');
+    {
+      const sentN = ws2.sent.length;
+      intervals[1].fn();
+      const tail = ws2.sent.slice(sentN);
+      if (tail.length !== 2) throw new Error('M31: the resumed loop sent ' + tail.length + ' frames, expected state+clock');
+      for (const d of tail) {
+        const t = d instanceof Uint8Array ? d : new Uint8Array(d);
+        if (t[0] !== 26 && t[0] !== 32) throw new Error('M31: the resumed loop sent the wrong frame (type ' + t[0] + ')');
+      }
+      if (api.connected() !== true) throw new Error('M31: presence must be visible after the rejoin');
+    }
+
+    /* 4. EDIT_SYNC catch-up: the full edit history the server replays on every
+       join (edits made by 121 while this tab was away) applies, and a second
+       identical replay is a no-op (set semantics) */
+    const itemsBefore = items.length;
+    const syncBuf = new Uint8Array(1 + 4 + 3 * 23);
+    syncBuf[0] = 30;
+    new DataView(syncBuf.buffer).setUint32(1, 3, true);
+    syncBuf.set(buildEdit(121, p0.idx, 0, mpPayloadU8(1)), 5);
+    syncBuf.set(buildEdit(121, plIdx, 1, mpPayloadU8(plTarget)), 5 + 23);
+    syncBuf.set(buildEdit(121, 0, 2, mpPayloadCamp(7.5, -4.25, 2.4)), 5 + 2 * 23);
+    ws2.onmessage({ data: syncBuf.buffer.slice(0) });
+    if (p0.cocos !== 1) throw new Error('M31: the EDIT_SYNC palm edit was not applied');
+    if (pl.chargesLeft !== plTarget || pl.min !== 0
+        || pl.state !== (plTarget > 0 ? 'ready' : 'depleted'))
+      throw new Error('M31: the EDIT_SYNC plant harvest was not mirrored');
+    if (!camp || Math.abs(camp.x - 7.5) > 1e-6 || Math.abs(camp.z + 4.25) > 1e-6 || Math.abs(camp.rot - 2.4) > 1e-5)
+      throw new Error('M31: the EDIT_SYNC camp was not adopted');
+    if (items.length !== itemsBefore) throw new Error('M31: the catch-up replay spawned items');
+    ws2.onmessage({ data: syncBuf.buffer.slice(0) });   /* the second replay */
+    if (p0.cocos !== 1 || pl.chargesLeft !== plTarget
+        || !camp || Math.abs(camp.x - 7.5) > 1e-6 || items.length !== itemsBefore)
+      throw new Error('M31: the EDIT_SYNC catch-up is not idempotent');
+
+    /* 5. clock re-adoption: bit4 from the authority stashes the pending
+       clock and frame() snaps to it after the reconnect */
+    sendTick(0x11, 121, 2, [PLAYER_120, PLAYER_121], 611.25);
+    if (Math.abs(mpTimeAdopt - 611.25) > 1e-4)
+      throw new Error('M31: the authority clock was not stashed from bit4');
+    started = true; dead = false; won = false; onRaft = false;
+    for (const k of ['thirst', 'hunger', 'health', 'wet'])
+      stats[k] = Math.min(100, Math.max(0, stats[k]));
+    pump(1);
+    if (Math.abs(gameMin - 611.25) > 1e-4)
+      throw new Error('M31: frame() did not snap gameMin to the adopted clock: ' + gameMin);
+    if (mpTimeAdopt !== 0) throw new Error('M31: the pending clock was not consumed');
+    pump(1);
+    if (gameMin <= 611.25 || gameMin - 611.25 > 0.05)
+      throw new Error('M31: the local clock did not resume after the snap: ' + gameMin);
+
+    /* 6. authority flips back to this tab: the resumed loop must now also
+       upload the animal snapshot (authority liveness for the server) */
+    sendTick(0x01, 120, 3, [PLAYER_120, PLAYER_121], null);
+    if (api.isAuthority() !== true || mpWorldLocked() !== false)
+      throw new Error('M31: the authority flip was not recognized');
+    {
+      const sentN = ws2.sent.length;
+      intervals[1].fn();
+      const tail = ws2.sent.slice(sentN);
+      if (tail.length !== 3) throw new Error('M31: the authority loop sent ' + tail.length + ' frames, expected state+clock+animals');
+      const types = tail.map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d))[0]);
+      if (types[0] !== 26 || types[1] !== 32 || types[2] !== 29)
+        throw new Error('M31: the resumed authority loop is missing the animal snapshot: ' + types.join(','));
+      const up = tail[2];
+      if (up.byteLength !== 5 + expectTotal * 24)
+        throw new Error('M31: the resumed animal upload has the wrong size (len ' + up.byteLength + ')');
+    }
+
+    /* 7. back to single-player: everything goes inert again */
+    api.close();
+    mpApi = null;
+    mpAnimalsFrame(0.016);
+    const g0 = gameMin;
+    pump(1);
+    if (!(gameMin > g0))
+      throw new Error('M31: after the MP session the single-player clock stopped');
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    for (const av of mpAvatars.values()) scene.remove(av.grp);
+    mpAvatars.clear();
+    palms.forEach((q, i) => {
+      q.cocos = savePalms[i];
+      for (let j = 0; j < 2; j++) {
+        if (j < q.cocos)
+          setM(q.idx * 2 + j, cocosMesh,
+            j === 0 ? q.top[0] + 0.18 : q.top[0] - 0.15,
+            q.top[1] - 0.18,
+            j === 0 ? q.top[2] + 0.1 : q.top[2] - 0.14, 0, 0, 0, 1, 1, 1);
+        else
+          setM(q.idx * 2 + j, cocosMesh, 9999, -99, 9999, 0, 0, 0, 0, 0, 0);
+      }
+    });
+    plants.forEach((q, i) => {
+      q.chargesLeft = savePlants[i].chargesLeft;
+      q.state = savePlants[i].state;
+      q.min = savePlants[i].min;
+      q.wear = savePlants[i].wear;
+      emitPlant(q);
+    });
+    if (camp !== saveCamp && camp && camp.grp) scene.remove(camp.grp);
+    camp = saveCamp;
+    if (saveCamp && saveCamp.grp) scene.add(saveCamp.grp);
+    torchLights.length = saveTorches;
+    for (let i = saveItems; i < items.length; i++) if (items[i].mesh) scene.remove(items[i].mesh);
+    items.length = saveItems;
+    let ai = 0;
+    for (const sp of animals)
+      for (const e of sp.pop) {
+      const rec = saveAnimals[ai++];
+      e.x = rec.x; e.z = rec.z; e.dir = rec.dir; e.n = rec.n; e.alive = rec.alive;
+      if (rec.meshCount !== undefined && e.mesh) e.mesh.count = rec.meshCount;
+      if (e.grp) {
+        e.grp.position.x = rec.gx; e.grp.position.z = rec.gz;
+        e.grp.rotation.y = rec.ry; e.grp.visible = rec.vis;
+      }
+      }
+    gameMin = saveGameMin;
+    mpTimeAdopt = 0;
+    fires.forEach((f, i) => { f.cooking = saveCooking[i]; });
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+    stats.health = saveStats.health; stats.hunger = saveStats.hunger;
+    stats.thirst = saveStats.thirst; stats.wet = saveStats.wet;
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);
