@@ -701,11 +701,15 @@ rig.position.copy(spawn);
 rig.position.y = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
 scene.add(rig);
 
-/* ---------------- 2.5D camera: fixed oblique, no free-look ---------------- */
+/* ---------------- 2.5D camera: oblique third-person, drag to orbit ---------------- */
 
-const CAM_OFFSET = new THREE.Vector3(0, 8.5, 10.5);
+const CAM_DIST = Math.hypot(8.5, 10.5);   /* same distance as the old fixed offset (0, 8.5, 10.5) */
+let camYaw = 0;                            /* 0 = the old fixed view, camera behind +z */
+let camPitch = Math.atan2(8.5, 10.5);      /* ~38 deg oblique, clamped in the drag handler */
+const CAM_PITCH_MIN = 0.20, CAM_PITCH_MAX = 1.35;
 function updateCamera() {
-  camera.position.set(rig.position.x + CAM_OFFSET.x, rig.position.y + CAM_OFFSET.y, rig.position.z + CAM_OFFSET.z);
+  const hy = CAM_DIST * Math.cos(camPitch), vy = CAM_DIST * Math.sin(camPitch);
+  camera.position.set(rig.position.x + Math.sin(camYaw) * hy, rig.position.y + vy, rig.position.z + Math.cos(camYaw) * hy);
   camera.lookAt(rig.position.x, rig.position.y + 1.2, rig.position.z);
 }
 
@@ -715,6 +719,21 @@ const keys = {};
 let started = false;
 const overlay = document.getElementById('overlay');
 const hud = document.getElementById('hud');
+/* drag to orbit: left-button drag on the scene canvas turns yaw, vertical drag tilts pitch */
+let dragging = false, dragX = 0, dragY = 0;
+window.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || e.target !== renderer.domElement) return;
+  dragging = true; dragX = e.clientX; dragY = e.clientY;
+  if (e.pointerId !== undefined) renderer.domElement.setPointerCapture(e.pointerId);
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  camYaw -= (e.clientX - dragX) * 0.0032;
+  camPitch = Math.max(CAM_PITCH_MIN, Math.min(CAM_PITCH_MAX, camPitch + (e.clientY - dragY) * 0.0032));
+  dragX = e.clientX; dragY = e.clientY;
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (won) {   /* M21: the win overlay owns the keys ‒ only R (reload) + E (endless) act */
@@ -4383,7 +4402,7 @@ function frame(t) {
   if (fpsN >= 20) { fps = fpsAcc / fpsN; fpsAcc = 0; fpsN = 0; }
   if (showPerf) { perf.frames++; __perfLast = performance.now(); }   /* M24 */
 
-  /* movement: camera is fixed behind +z, so W/S = ∓z, A/D = ∓x */
+  /* movement: WASD relative to the camera (mouse-drag orbits the camera) */
   let mx = 0, mz = 0;
   if (started && !dead) {
     if (keys['KeyW']) mz -= 1;
@@ -4393,6 +4412,11 @@ function frame(t) {
   }
   const moving = mx !== 0 || mz !== 0;
   const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 8.5 : 5.5;
+  {   /* rotate the camera-space input into world space (at camYaw 0 this is the identity) */
+    const sy = Math.sin(camYaw), cy = Math.cos(camYaw);
+    const wx = mx * cy + mz * sy, wz = mz * cy - mx * sy;
+    mx = wx; mz = wz;
+  }
   if (onRaft && camp.structures.raft) {   /* M21: aboard ‒ WASD rows the raft, the rig follows the deck */
     const rp = camp.structures.raft.position;
     const rSpeed = keys['ShiftLeft'] || keys['ShiftRight'] ? 6.0 : 4.0;
