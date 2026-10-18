@@ -5,11 +5,11 @@ category: decision
 status: active
 tags: [m20, raft, crafting, camp, inventory]
 created: "2026-10-18T00:22:54"
-updated: "2026-10-18T00:23:11"
+updated: "2026-10-18T00:43:10"
 ---
 
 <!-- compiled_truth -->
-M20 = raft construction system: the complete gather/craft/build path for the winning raft (PLAN.md M20: "Player can gather/build all required raft components"). Shipped `0ab4f16`. M21 owns the escape/win sequence; M20 only builds the raft, it does not take it to open water.
+M20 = raft construction system: the complete gather/craft/build path for the winning raft (PLAN.md M20: "Player can gather/build all required raft components"). Shipped `0ab4f16`. M20 only builds the raft, it does not take it to open water ‒ the escape/win sequence shipped as M21 (`d312b0c`); see [[m21-escape-win]].
 
 **Wood is the first new `INV` counter, gathered from the existing vegetation framework, not a new plant species.** The `actUse` palm branch broadens to any palm within 3.5 u: a palm with coconuts still drops one via `dropCoconut` (the M11 storm wind-drop path is untouched), while a spent palm (`cocos == 0`) yields +1 wood with a one-time `learn('wood')`. Zero world-gen / `PLANT_TYPES` / animal-registry changes.
 
@@ -36,6 +36,12 @@ M20 = raft construction system: the complete gather/craft/build path for the win
   affects: [m20-raft-construction]
 
 - time: 2026-10-18T00:23:11
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: brain update-truth
+  affects: [m20-raft-construction]
+
+- time: 2026-10-18T00:43:10
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: brain update-truth
