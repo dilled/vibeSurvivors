@@ -151,7 +151,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M26** ✅ | Single-player v1 integration/polish | Complete single-player game passes end-to-end playthrough |
 | **M27** ✅ | ServerBase `VibeSurvivorsPlugin` scaffold + protocol | Plugin builds and client can connect with `?mp=host:port` |
 | **M28** ✅ | Multiplayer player presence + movement | 3 tabs see the same connected players |
-| **M29** | Shared deterministic world state | 3 tabs converge on the same island/world state |
+| **M29** ✅ | Shared deterministic world state | 3 tabs converge on the same island/world state |
 | **M30** | Multiplayer animals + gameplay event relay | Animal/gameplay events converge across clients |
 | **M31** | Multiplayer integration + reconnect/testing | 3 tabs survive normal play/reconnect without world divergence |
 

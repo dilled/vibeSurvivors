@@ -66,7 +66,8 @@ export class Euler {
   set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
 }
 export class Quaternion { constructor() { this.setFromEuler(() => {}); } setFromEuler() {} }
-export class Matrix4 { compose() {} }
+/* M29: compose records the translation so smoke can read instance positions */
+export class Matrix4 { compose(v, q, s) { this._p = { x: v.x, y: v.y, z: v.z }; } }
 
 class Mat {
   constructor(p = {}) {
@@ -112,9 +113,9 @@ export class InstancedMesh extends Node {
     this.count = count;
     this.geometry = geometry;
     this.material = material;
-    this.instanceMatrix = { setUsage: () => {}, count };
+    this.instanceMatrix = { setUsage: () => {}, count, mats: {} };
   }
-  setMatrixAt(i, m) { this._count = (this._count || 0) + 1; }
+  setMatrixAt(i, m) { this._count = (this._count || 0) + 1; this.instanceMatrix.mats[i] = m._p || null; }   // M29: record the translation
   setColorAt(i, c) { if (!this.instanceColor) this.instanceColor = { needsUpdate: false, n: 0 }; this.instanceColor.n = (this.instanceColor.n || 0) + 1; }
 }
 export class Scene extends Node {

@@ -3081,8 +3081,10 @@ function actUse() {
   /* 4. shake a palm: drop a coconut, or gather wood from a spent palm (M20) */
   const p = palms.find((p) => Math.hypot(p.x - x, p.z - z) < 3.5);
   if (p) {
+    if (mpWorldLockedGuard()) return;   /* M29: world mutations belong to the authority */
     if (p.cocos > 0) {
       dropCoconut(p);   /* M11: shared with the storm wind */
+      mpEmit(0, p.idx, mpPayloadU8(p.cocos));   /* M29: relay the new coco count */
       learn('coco', 'coconuts: shake the palm, eat when you are thirsty');
       toast('\u{1F965} a coconut tumbles down');
     } else {
@@ -3124,6 +3126,7 @@ function actUse() {
     if (d < phd) { phd = d; ph = p; }
   }
   if (ph) {
+    if (mpWorldLockedGuard()) return;   /* M29: harvests are authority-only */
     const d = PLANT_TYPES[ph.type].drop;
     INV[d.invKey] = (INV[d.invKey] || 0) + d.n;
     if (PLANT_TYPES[ph.type].learn) learn(ph.type, PLANT_TYPES[ph.type].learn);
@@ -3132,6 +3135,7 @@ function actUse() {
     ph.state = ph.chargesLeft > 0 ? 'ready' : 'depleted';
     ph.min = 0;
     emitPlant(ph);
+    mpEmit(1, plants.indexOf(ph), mpPayloadU8(ph.chargesLeft));   /* M29 */
     return;
   }
 }
@@ -3183,6 +3187,7 @@ function actFire() {
 }
 function actCamp() {
   if (dead) return;
+  if (mpWorldLockedGuard()) return;   /* M29 */
   if (camp) { toast('\u26FA\uFE0F your camp is already established'); return; }
   const { x, z } = playerPos();
   const chk = campCheck(x, z);
@@ -3192,9 +3197,11 @@ function actCamp() {
   learn('camp', 'you make your camp \u2014 flat dry ground, a flag, your place on the island');
   toast('\u26FA\uFE0F camp established \u2014 this is your ground');
   saveGame();   /* M25 */
+  mpEmit(2, 0, mpPayloadCamp(x, z, camp.rot));   /* M29: relay camp spot + heading */
 }
 function actShelter() {
   if (dead) return;
+  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.shelter) { toast('the shelter is already built'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3208,9 +3215,11 @@ function actShelter() {
   learn('shelter', 'shelter: a lean-to of palm leaf and driftwood \u2014 J');
   toast('\u26D3\uFE0F shelter built');
   saveGame();   /* M25 */
+  mpEmit(3, 0, null);   /* M29 */
 }
 function actBed() {
   if (dead) return;
+  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.bed) { toast('the bed is already made'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3224,9 +3233,11 @@ function actBed() {
   learn('bed', 'bed: palm leaf on a driftwood frame \u2014 K');
   toast('\uD83D\uDECF\uFE0F bed made');
   saveGame();   /* M25 */
+  mpEmit(4, 0, null);   /* M29 */
 }
 function actFence() {
   if (dead) return;
+  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.fence) { toast('the fence is already built'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3238,9 +3249,11 @@ function actFence() {
   learn('fence', 'fence: driftwood posts and rails around the camp \u2014 the gate faces where you were standing');
   toast('\uD83D\uDED7\uFE0F fence built \u2014 the camp has a perimeter');
   saveGame();   /* M25 */
+  mpEmit(5, 0, null);   /* M29 */
 }
 function actTorch() {
   if (dead) return;
+  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.torch) { toast('the camp torch is already standing'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3253,6 +3266,7 @@ function actTorch() {
   learn('torch', 'camp torch: a standing light for the camp \u2014 N \u2014 it burns all night');
   toast('\uD83D\uDD25 camp torch built \u2014 the camp is lit');
   saveGame();   /* M25 */
+  mpEmit(6, 0, null);   /* M29 */
 }
 /* sleep (M4): a lit bed at camp carries the night; the clock jumps to dawn */
 function sleepCheck() {
@@ -3306,6 +3320,7 @@ function actCraftRope() {
 }
 function actBuildRaft() {
   if (dead) return;
+  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.raft) { toast('the raft is already built'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3327,6 +3342,7 @@ function actBuildRaft() {
   logLine('you lash a raft together', 'survival');
   toast('\u{1F6A3} raft built \u2014 the way off this island');
   saveGame();   /* M25 */
+  mpEmit(7, 0, null);   /* M29 */
 }
 /* M21: escape ‒ row the raft past the reef and the run is won. started=false
    freezes the whole sim (the existing gates) while the renderer keeps drawing. */
@@ -4424,7 +4440,12 @@ function frame(t) {
   /* survival: time, stats, world sim */
   if (started && !dead) {
     const pNow = (p0 + gameMin / 1800) % 1;
-    gameMin += dt * timeRate(pNow);   /* M22: 12h day = 20 real min, 12h night = 10; endless days run faster */
+    if (mpTimeAdopt !== 0) {   /* M29: follower adopts the authority's clock (snap) */
+      gameMin = mpTimeAdopt;
+      mpTimeAdopt = 0;
+    } else {
+      gameMin += dt * timeRate(pNow);   /* M22: 12h day = 20 real min, 12h night = 10; endless days run faster */
+    }
     if ((pNow < DAY_FRAC) !== (((p0 + gameMin / 1800) % 1) < DAY_FRAC)) saveGame();   /* M25: save once per dusk/dawn crossing */
     stats.thirst = Math.max(0, stats.thirst - THIRST_RATE * dt);
     stats.hunger = Math.max(0, stats.hunger - HUNGER_RATE * dt);
@@ -4566,11 +4587,110 @@ function mpRemotesFrame(dt) {
   }
 }
 
+/* ----------------------- multiplayer world state (optional, M29) -----------------------
+ * The island is a pure function of (SEED, gameMin, edits): the authority
+ * uploads every world mutation as a 23 B edit (lib/mp.js sendEdit) and its
+ * clock at 30 Hz; the server relays both in the tick (bit1/bit4) and replays
+ * the full edit history to late joiners (EDIT_SYNC). Followers apply relayed
+ * edits through these same deterministic functions and are locked out of
+ * world mutations. Everything here is inert without ?mp= (mpApi stays null)
+ * and uses zero rng.
+ */
+let mpTimeAdopt = 0;     /* pending authority clock (frame() consumes it) */
+let mpLockToastT = 0;    /* cooldown for the world-locked toast */
+const mpPayloadU8 = (v) => { const b = new Uint8Array(12); b[0] = v & 0xff; return b; };
+const mpPayloadCamp = (x, z, rot) => {
+  const b = new Uint8Array(12);
+  new DataView(b.buffer).setFloat32(0, x, true);
+  new DataView(b.buffer).setFloat32(4, z, true);
+  new DataView(b.buffer).setFloat32(8, rot, true);
+  return b;
+};
+/* Edit kinds (v1): 0=palm (payload[0]=u8 cocos set), 1=plant (payload[0]=u8
+ * chargesLeft set), 2=camp (payload = f32 x, f32 z, f32 rot LE), 3=shelter
+ * 4=bed 5=fence 6=torch 7=raft (payload unused; positions = camp +
+ * campOffsets(type), mesh built only if the slot is empty). Set semantics:
+ * replaying the same edit is a no-op, so the EDIT_SYNC catch-up is safe.
+ */
+function mpApplyWorldEdit(kind, entityIndex, payload) {
+  if (!payload || kind > 7) return;
+  if (kind === 0) {              /* palm: hide the dropped crowns (no falling items on replay) */
+    const p = palms[entityIndex];
+    if (!p) return;
+    const c = Math.min(2, payload[0] & 0xff);
+    if (p.cocos <= c) { p.cocos = c; return; }
+    for (let n = p.cocos; n > c; n--)
+      setM(p.idx * 2 + (n - 1), cocosMesh, 9999, -99, 9999, 0, 0, 0, 0, 0, 0);
+    p.cocos = c;
+    return;
+  }
+  if (kind === 1) {              /* plant: mirror the local harvest exactly */
+    const pl = plants[entityIndex];
+    if (!pl) return;
+    const cl = payload[0] & 0xff;
+    if (pl.chargesLeft === cl) return;
+    pl.chargesLeft = cl;
+    pl.state = cl > 0 ? 'ready' : 'depleted';
+    pl.min = 0;
+    emitPlant(pl);
+    return;
+  }
+  if (kind === 2) {              /* camp: adopt the authority's spot + heading */
+    if (camp) return;            /* a local camp wins (own edits are skipped anyway) */
+    const dv = new DataView(payload.buffer, payload.byteOffset, 12);
+    const x = dv.getFloat32(0, true), z = dv.getFloat32(4, true), rot = dv.getFloat32(8, true);
+    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(rot)) return;
+    makeCamp(x, z);
+    camp.rot = rot;
+    return;
+  }
+  const type = kind === 3 ? 'shelter' : kind === 4 ? 'bed' : kind === 5 ? 'fence'
+             : kind === 6 ? 'torch' : 'raft';
+  if (!camp || camp.structures[type]) return;
+  if (type === 'fence') {
+    camp.structures.fence = buildFenceMesh(camp.x, camp.z, camp.rot);
+  } else if (type === 'torch') {
+    const o = campOffsets('torch');
+    camp.structures.torch = buildTorchMesh(o.x, heightAt(o.x, o.z), o.z);
+  } else {
+    const o = campOffsets(type);
+    camp.structures[type] =
+      type === 'shelter'
+        ? buildShelterMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z))
+        : type === 'bed'
+        ? buildBedMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z))
+        : buildRaftMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z));
+  }
+}
+
+/* Upload one world edit. No-op unless connected AND this tab is the authority.
+ * (The server enforces the same rule; followers are locked out below too.) */
+function mpEmit(kind, entityIndex, payload) {
+  if (!mpApi || !mpApi.connected()) return;
+  if (!mpApi.authorityId || mpApi.authorityId !== mpApi.publicId) return;
+  mpApi.sendEdit(kind, entityIndex, payload);
+}
+
+/* This tab is a FOLLOWER: world mutations are locked to the authority. */
+function mpWorldLocked() {
+  return !!(mpApi && mpApi.connected() && mpApi.authorityId
+    && mpApi.authorityId !== mpApi.publicId);
+}
+function mpWorldLockedGuard() {
+  if (!mpWorldLocked()) return false;
+  if (runT > mpLockToastT) {
+    toast('shared island \u2014 the host drives the world for everyone');
+    mpLockToastT = runT + 2;
+  }
+  return true;
+}
+
 /* ----------------------- multiplayer (optional, M27) -----------------------
  * Append ?mp=host:port to the URL to connect to a VibeSurvivors relay server
  * (ServerBase/VibeSurvivorsPlugin). Without it the game runs exactly as
- * before (single-player, zero behavior change). This hook only attaches the
- * connect/relay client; remote-player presence rendering is M28.
+ * before (single-player, zero behavior change). This hook attaches the
+ * connect/relay client; M28 wires the presence renderer, M29 wires the
+ * world-edit + clock hooks.
  */
 {
   const mpUrl = new URLSearchParams(location.search).get('mp');
@@ -4625,6 +4745,22 @@ function mpRemotesFrame(dt) {
       rig, url: mpUrl, seed: SEED,
       displayName: await askMpName(),
       inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
+      /* M29: shared deterministic world state */
+      gameMin: () => gameMin,
+      onEdit: (pid, eidx, kind, action, payload) => {
+        if (pid === mpApi.publicId) return;   /* own edit: already applied locally */
+        mpApplyWorldEdit(kind, eidx, payload);
+      },
+      onEditSync: (pid, eidx, kind, action, payload) => {
+        if (pid === mpApi.publicId) return;   /* already applied before the drop */
+        mpApplyWorldEdit(kind, eidx, payload);
+      },
+      onTime: (gm) => {
+        /* followers adopt the authority's clock; the authority keeps its own */
+        if (!Number.isFinite(gm)) return;
+        if (!mpApi.authorityId || mpApi.authorityId === mpApi.publicId) return;
+        mpTimeAdopt = gm;
+      },
     });
   }
 }
