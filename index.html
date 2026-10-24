@@ -4728,13 +4728,15 @@ function mpWorldLockedGuard() {
   return true;
 }
 
-/* --------------------- multiplayer animals (optional, M30) ---------------
- * The WORLD AUTHORITY owns the animal sim (relay model, same as M29 edits):
- * it uploads its whole roster 30 Hz (MSG_VIVS_ANIMALS, see lib/mp.js) and
- * followers overwrite their local animals from the relayed snapshot
- * (mpApi.animals, tick bit2). The relayed transform wins each frame; the
- * local sim keeps running for animation. Animals are events-carrying, so
- * converging animals = converging events. Slot = type * 64 + populationIndex
+/* --------------------- multiplayer animals (M30, superseded by M35) ------
+ * M35: the SERVER simulates the first four species (fish, crabs, tigers,
+ * gulls = 28 animals) on its own clock and every tick's bit2 carries its
+ * snapshot for all tabs; mpAnimalsFrame below adopts those transforms on
+ * EVERY tab including the authority (M30's authority skip is gone). The
+ * local sim keeps running for the six unported species (monkey, lizard,
+ * snake, pelican, shark, spider) and for animation on the 28 slots.
+ * The M30 upload side (authority relaying its own 51-entry roster 30 Hz)
+ * stays in place until M40 retires it. Slot = type * 64 + populationIndex
  * (type = animal registry index): same world seed => same roster on every
  * client, so the mapping matches without transmission. Inert without ?mp=
  * (mpApi stays null), zero rng.
@@ -4773,15 +4775,17 @@ function mpCollectAnimals() {
   }
   return out;
 }
-/* Follower apply (called once per frame after both animal phases): the
- * relayed snapshot overwrites local state. Data fields (x/z/dir) are nudged
- * first so the local sim's own grp sync follows the authority, then grp is
- * aligned directly (M28-style lerp; shortest-arc yaw). Dead relays hide the
- * mesh but never force it visible (local hides, e.g. crabs fleeing a
- * hunting lizard, must keep working). */
+/* Snapshot apply (called once per frame after both animal phases): the
+ * SERVER's animal snapshot (M35) overwrites local state for whatever slots
+ * it carries (the 28 server-simulated animals; absent slots are untouched).
+ * Data fields (x/z/dir) are nudged first so the local sim's own grp sync
+ * follows the server, then grp is aligned directly (M28-style lerp;
+ * shortest-arc yaw). All tabs adopt it, including the authority (M35
+ * removed the M30 authority skip). Dead relays hide the mesh but never
+ * force it visible (local hides, e.g. crabs fleeing a hunting lizard,
+ * must keep working). */
 function mpAnimalsFrame(dt) {
   if (!mpApi || !mpApi.connected()) return;
-  if (mpApi.isAuthority()) return;     /* authority: own sim IS the truth */
   const map = mpApi.animals;
   if (!map || map.size === 0) return;
   const k = 1 - Math.exp(-dt * 15);

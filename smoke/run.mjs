@@ -4580,6 +4580,199 @@ patched += `
   if (palms.length !== nP || bigTrees.length !== nT || rocks.length !== nR || plants.length !== nPl)
     throw new Error('M34: restore failed');
 }
+
+/* ---- M35: server-simulated animals (all tabs adopt the bit2 snapshot) ----
+   M35 removed the M30 authority skip from mpAnimalsFrame: the server now
+   simulates the first four species (fish, crabs, tigers, gulls) and every
+   tick's bit2 carries its 28-entry snapshot for ALL tabs. Every tab adopts
+   it, including the world authority. The M30 upload side (the authority's
+   type-29 roster relay) is still in place until M40 retires it. */
+{
+  /* 1. single-player invariants: without mpApi the apply layer is inert */
+  if (mpApi !== null) throw new Error('M35: mpApi leaked in from the M34 block');
+  mpAnimalsFrame(0.016);   /* must be a silent no-op (no mpApi) */
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  /* snapshot every animal the block can touch (M30 pattern) */
+  const saveAnimals = [];
+  for (const sp of animals)
+    for (const e of sp.pop) {
+      const rec = { x: e.x, z: e.z, dir: e.dir, n: e.n, alive: e.alive };
+      if (e.mesh) rec.meshCount = e.mesh.count;
+      if (e.grp) { rec.gx = e.grp.position.x; rec.gz = e.grp.position.z;
+        rec.ry = e.grp.rotation.y; rec.vis = e.grp.visible; }
+      saveAnimals.push(rec);
+    }
+  const saveGameMin = gameMin, saveStarted = started, saveDead = dead;
+  const saveWon = won, saveOnRaft = onRaft;
+
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M35Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+    });
+    mpApi = api;
+
+    /* 2. connect + join success (publicId 110 big-endian, the M27 pattern) */
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M35: the join success was not parsed');
+
+    /* a tick whose bit2 (animals section) carries the 28-entry server
+       roster: fish 0..4, crabs 64..78, tigers 128..130, gulls 192..196 */
+    const slotOf = {};
+    for (const r of mpAnimalRoster()) slotOf[r.slot] = r;
+    const expectedSlots = [];
+    for (let i = 0; i < schools.length; i++) expectedSlots.push(i);
+    for (let i = 0; i < crabs.length; i++) expectedSlots.push(64 + i);
+    for (let i = 0; i < tigers.length; i++) expectedSlots.push(128 + i);
+    for (let i = 0; i < gulls.length; i++) expectedSlots.push(192 + i);
+    if (expectedSlots.length !== 28)
+      throw new Error('M35: the server roster must have 28 entries, got ' + expectedSlots.length);
+    const far = { 0: [30, -20, 0], 64: [40, 10, 0.5], 128: [-40, 25, 1.2], 192: [10, -35, -0.7] };
+    const entries = [];
+    for (const s of expectedSlots) {
+      const r = slotOf[s];
+      if (!r) throw new Error('M35: no roster entry for slot ' + s);
+      const f = far[s];
+      entries.push(f
+        ? { slot: s, type: r.type, x: f[0], y: 0, z: f[1], yaw: f[2], dead: false }
+        : { slot: s, type: r.type, x: 12.5 + s * 0.001, y: 0, z: -8.25 + s * 0.001, yaw: 0.1, dead: false });
+    }
+    const sendAnimalsTick = (auth, tickEntries) => {
+      const u32b = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; };
+      const parts = [new Uint8Array([27, 0x04]), u32b(auth), u32b(tickEntries.length)];
+      for (const a of tickEntries) {
+        const b = new Uint8Array(24);
+        const dv = new DataView(b.buffer);
+        dv.setUint16(0, a.slot, true);
+        b[2] = a.type; b[3] = 0;
+        dv.setFloat32(4, a.x, true); dv.setFloat32(8, a.y, true);
+        dv.setFloat32(12, a.z, true); dv.setFloat32(16, a.yaw, true);
+        b[20] = a.dead ? 1 : 0;
+        parts.push(b);
+      }
+      const total = parts.reduce((s, q) => s + q.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const q of parts) { buf.set(q, off); off += q.length; }
+      wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
+    };
+
+    /* 3. this tab IS the authority and the snapshot parses */
+    sendAnimalsTick(110, entries);
+    if (api.isAuthority() !== true)
+      throw new Error('M35: the tab is not recognized as the authority');
+    if (api.animals.size !== 28)
+      throw new Error('M35: api.animals must hold the 28 server entries, got ' + api.animals.size);
+    for (const s of expectedSlots)
+      if (!api.animals.has(s)) throw new Error('M35: slot ' + s + ' missing from the parsed snapshot');
+
+    /* 4. the M30 upload side is untouched: the 30 Hz loop still relays the
+       authority's own roster as type 29 (retired at M40) */
+    intervals[0].fn();
+    {
+      const tail = wsInstances[0].sent.slice(-3).map((d) =>
+        (d instanceof Uint8Array ? d : new Uint8Array(d))[0]);
+      const upIdx = tail.lastIndexOf(29);
+      if (upIdx < 0)
+        throw new Error('M35: the authority loop no longer uploads type 29: ' + tail.join(','));
+    }
+
+    /* 5. the authority tab ADOPTS the server snapshot (the M30 skip is gone):
+       the four far targets converge; slots 256+ (unported species) are
+       untouched because they are absent from the snapshot */
+    const s0 = schools[0], c0 = crabs[0], t0 = tigers[0], g0 = gulls[0];
+    for (const [name, e] of [['crab', c0], ['tiger', t0], ['gull', g0]])
+      if (!e.grp) throw new Error('M35: no grp on the ' + name + ' to adopt');
+    const monkeyR = mpAnimalRoster().find((r) => r.id === 'monkey');
+    if (!monkeyR || monkeyR.slot !== 256)
+      throw new Error('M35: the first monkey slot is not 256 (unported band)');
+    const mEnt = monkeyR.pop[0];
+    const before = {
+      sx: s0.x, sz: s0.z,
+      cx: c0.x, cz: c0.z, cgrx: c0.grp.position.x, cgrz: c0.grp.position.z, cry: c0.grp.rotation.y,
+      tx: t0.x, tz: t0.z, tgrx: t0.grp.position.x, tgrz: t0.grp.position.z, try_: t0.grp.rotation.y,
+      gx: g0.x, gz: g0.z, ggrx: g0.grp.position.x, ggrz: g0.grp.position.z, gry: g0.grp.rotation.y,
+      mx: mEnt.x, mz: mEnt.z, mdir: mEnt.dir,
+      mgrx: mEnt.grp ? mEnt.grp.position.x : null,
+      mgrz: mEnt.grp ? mEnt.grp.position.z : null,
+    };
+    /* yaw compares modulo 2*pi: the shortest-arc lerp converges to the
+       target offset by the spawn-dir's 2*pi multiple (M28-style lerp) */
+    const angDiff = (a, b) => {
+      let d = (a - b) % (2 * Math.PI);
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      return Math.abs(d);
+    };
+    for (let i = 0; i < 60; i++) mpAnimalsFrame(0.1);
+    if (Math.abs(s0.x - 30) > 1e-3 || Math.abs(s0.z - -20) > 1e-3)
+      throw new Error('M35: the authority did not adopt the fish anchor: (' + s0.x + ', ' + s0.z + ')');
+    if (Math.abs(c0.grp.position.x - 40) > 1e-3 || Math.abs(c0.grp.position.z - 10) > 1e-3)
+      throw new Error('M35: the authority did not adopt the crab transform');
+    if (angDiff(c0.grp.rotation.y, 0.5) > 1e-3)
+      throw new Error('M35: the authority did not adopt the crab yaw (' + c0.grp.rotation.y + ')');
+    if (Math.abs(t0.grp.position.x - -40) > 1e-3 || Math.abs(t0.grp.position.z - 25) > 1e-3)
+      throw new Error('M35: the authority did not adopt the tiger transform');
+    if (angDiff(t0.grp.rotation.y, 1.2) > 1e-3)
+      throw new Error('M35: the authority did not adopt the tiger yaw');
+    if (Math.abs(g0.grp.position.x - 10) > 1e-3 || Math.abs(g0.grp.position.z - -35) > 1e-3)
+      throw new Error('M35: the authority did not adopt the gull transform');
+    if (angDiff(g0.grp.rotation.y, -0.7) > 1e-3)
+      throw new Error('M35: the authority did not adopt the gull yaw');
+    if (Math.abs(c0.x - c0.grp.position.x) > 0.5 || Math.abs(t0.x - t0.grp.position.x) > 0.5)
+      throw new Error('M35: a data field drifted from its grp after adoption');
+    if (mEnt.x !== before.mx || mEnt.z !== before.mz || mEnt.dir !== before.mdir
+        || (mEnt.grp && (mEnt.grp.position.x !== before.mgrx || mEnt.grp.position.z !== before.mgrz)))
+      throw new Error('M35: an unported (slot 256+) animal was touched by the snapshot adoption');
+
+    /* 6. back to single-player: the apply layer goes inert again */
+    api.close();
+    mpApi = null;
+    mpAnimalsFrame(0.016);
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    let ai = 0;
+    for (const sp of animals)
+      for (const e of sp.pop) {
+        const rec = saveAnimals[ai++];
+        e.x = rec.x; e.z = rec.z; e.dir = rec.dir; e.n = rec.n; e.alive = rec.alive;
+        if (rec.meshCount !== undefined && e.mesh) e.mesh.count = rec.meshCount;
+        if (e.grp) {
+          e.grp.position.x = rec.gx; e.grp.position.z = rec.gz;
+          e.grp.rotation.y = rec.ry; e.grp.visible = rec.vis;
+        }
+      }
+    gameMin = saveGameMin;
+    mpTimeAdopt = 0;
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);
