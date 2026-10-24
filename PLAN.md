@@ -154,7 +154,7 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M29** ✅ | Shared deterministic world state | 3 tabs converge on the same island/world state |
 | **M30** ✅ | Multiplayer animals + gameplay event relay | Animal/gameplay events converge across clients |
 | **M31** ✅ | Multiplayer integration + reconnect/testing | 3 tabs survive normal play/reconnect without world divergence |
-| **M32** | Bit-exact C++ port of the deterministic stack: mulberry32, hash2, vnoise, fbm, heightAt, scatter ‒ golden test vectors extracted from the JS implementation | C++ output bit-matches JS vectors (smoke, N vectors) |
+| **M32** ✅ | Bit-exact C++ port of the deterministic stack: mulberry32, hash2, vnoise, fbm, heightAt, scatter ‒ golden test vectors extracted from the JS implementation | C++ output bit-matches JS vectors (smoke, N vectors) |
 | **M33** | Server island generation: C++ vegetation/plant/rock placement gen (positions + rotations) from the same seed; protocol **v2** (hard version bump) join payload ships the placement block on join; server keeps a world store for later validation | Server placements == client deterministic generation (E2E-proven) |
 | **M34** | Client renders the mp world from the server payload: with `?mp=` the local scatter/plant spawn is skipped and the world is built from server data; without `?mp=` nothing changes | 3 tabs see identical trees/rotations from server data; single-player bit-identical |
 | **M35** | Server animal sim ‒ part 1: animal framework in C++ (registry, FSM helpers, phase slots) + first species batch (fish, crabs, tigers, gulls) simulated and streamed to clients | 3-tab animals converge from server snapshots |

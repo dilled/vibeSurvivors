@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-24T14:42:32.173Z._
+_Auto-generated. Last updated 2026-10-24T15:34:17.936Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -26,6 +26,7 @@ _Auto-generated. Last updated 2026-10-24T14:42:32.173Z._
 - [m29-mp-world-state](pages/m29-mp-world-state.md) — category: decision | tags: [multiplayer, world-state, protocol] | M29 (`415fe12`, paired with ServerBase `ca10512` on `feat/vibecraft-server-authoritative`) shipped shared deterministic world state on top o
 - [m3-camp-fence-light](pages/m3-camp-fence-light.md) — category: decision | tags: [camp, fence, torch, light] | ## What shipped (M3 — fence + camp light/fire integration)
 - [m30-mp-animals](pages/m30-mp-animals.md) — category: decision | tags: [multiplayer, animals, protocol] | M30 (`3fdb625`, paired with the ServerBase commit on `feat/vibecraft-server-authoritative`) made the previously reserved tick bit2 (animals)
+- [m32-cpp-determinism-port](pages/m32-cpp-determinism-port.md) — category: decision | tags: [cpp, server, determinism, v8, m32] | ## What landed
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
 - [m5-tiger](pages/m5-tiger.md) — category: decision | tags: [tiger, night, predator, threat] | ## What shipped (M5 — first tiger)
 - [m6-night-1-encounter](pages/m6-night-1-encounter.md) — category: decision | tags: [tiger, gulls, crabs, night, encounter] | ## What shipped (M6 ‒ night-1 encounter)
