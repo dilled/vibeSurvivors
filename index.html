@@ -3922,6 +3922,7 @@ function pt(name) {
     overlay.style.display = 'none';   /* M25: a saved run is continued by the save/load boot block after the section */
   }
   if (__q.has('map')) toggleMap();   /* M18: debug ‒ open the paper map at load */
+  if (__q.has('tp')) { const __t = __q.get('tp').split(',').map(Number); if (__t.length >= 2 && isFinite(__t[0]) && isFinite(__t[1])) { rig.position.set(__t[0], Math.max(heightAt(__t[0], __t[1]), WATER - 0.25), __t[1]); } } /* TEMP-DBG */
 }
 
 /* ---- save/load (M25) ---- */
