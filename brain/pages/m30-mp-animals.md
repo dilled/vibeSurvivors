@@ -5,11 +5,13 @@ category: decision
 status: active
 tags: [multiplayer, animals, protocol]
 created: "2026-10-18T08:30:50"
-updated: "2026-10-18T08:31:16"
+updated: "2026-10-24T19:42:18"
 ---
 
 <!-- compiled_truth -->
-M30 (`3fdb625`, paired with the ServerBase commit on `feat/vibecraft-server-authoritative`) made the previously reserved tick bit2 (animals) live end-to-end on top of the [[vivsurvivors-mp-relay]] relay. Animals are shared state the same way M29 world edits are: a **relay model, not server simulation**.
+> **Superseded in part by M35 (`0b3206e`):** tick bit2 now carries the **server's own** 28-animal snapshot (5 fish, 15 crabs, 3 tigers, 5 gulls) for **all** tabs, and the client's M30 authority skip in `mpAnimalsFrame` is gone ‒ every tab (incl. the authority) adopts the snapshot. Only the M30 **upload** side (type-29 authority roster at 30 Hz) still exists on the wire until M40 retires it. Current model: [[v3-server-authoritative]]. The rest of this page is the M30 design as shipped.
+
+M30 (`3fdb625`, paired with the ServerBase commit on `feat/vibecraft-server-authoritative`) made the previously reserved tick bit2 (animals) live end-to-end on top of the [[vivsurvivors-mp-relay]] relay. Animals are shared state the same way M29 world edits are: a **relay model, not server simulation** (server-side relay retired in M35; see the banner above).
 
 ## Core model: the animals ARE the events
 
@@ -21,7 +23,7 @@ The **world authority** owns the animal sim. It uploads its **full animal roster
 - **Roster determinism removes the mapping channel**: `slot = type*64 + populationIndex` with `type` = registry index; same seed => the **same roster on every client** (default world: 51 individuals across the 10 species), so the slot mapping is never transmitted.
 - **Client authority gate**: `isAuthority()` = `publicId !== 0 && authorityId === publicId`; the 30 Hz loop appends the animals snapshot **only** for the authority, so non-authority tabs are silent on type-29 by construction.
 - Follower side (one `mpAnimalsFrame(dt)` call per frame, the M24 anchor after `pt('animL')`): the relayed transform **wins each frame** with the M28-style lerp `k = 1 - exp(-dt*15)` applied to both the data fields and the mesh `grp` (shortest-arc yaw). A relayed **dead** hides the mesh but **never forces it visible** (local hides like crabs fleeing a hunting lizard keep working); a dead fish school is emptied (n=0) while local regrowth stays subsumed by the 33 ms re-assert.
-- `index.html` wiring is a null-guarded M30 layer after the M29 layer; the authority skips it entirely (its own sim IS the truth).
+- `index.html` wiring is a null-guarded M30 layer after the M29 layer; the authority skips it entirely (its own sim IS the truth) ‒ **pre-M35 state; M35 removed the skip so every tab adopts the snapshot**.
 
 ## Known v1 limitation (accepted, not a defect)
 
@@ -53,4 +55,10 @@ The `Server.cfg` parser does not tolerate **inline comments** (the deployed giti
   kind: decision
   summary: "M30 shipped: tick bit2 animals relay end-to-end (MSG_VIVS_ANIMALS 29, authority 30 Hz upload, server authority+plausibility gate, follower snapshot overwrite); record relay model, roster determinism, authority gate, v1 limitation"
   source: "brain sync pass: commit 3fdb625 (M30)"
+  affects: [m30-mp-animals]
+
+- time: 2026-10-24T19:42:18
+  kind: decision
+  summary: "M35 supersession recorded: tick bit2 now carries the server's own 28-animal snapshot for all tabs (M30 authority relay retired server-side); the client M30 authority skip in mpAnimalsFrame is removed (every tab incl. authority adopts); only the M30 type-29 upload path stays until M40"
+  source: "brain sync pass: commit 0b3206e (M35, range 1b2913a..0b3206e)"
   affects: [m30-mp-animals]
