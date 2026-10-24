@@ -1,9 +1,10 @@
-// M35 E2E: the live relay (ServerBase VibeSurvivorsPlugin, port 3003) must
+// M36 E2E: the live relay (ServerBase VibeSurvivorsPlugin, port 3003) must
 // carry the SERVER-SIMULATED animal snapshot in every tick's bit2 section:
-// exactly 28 entries (5 fish, 15 crabs, 3 tigers, 5 gulls; slots
-// {0..4, 64..78, 128..130, 192..196}), byte-identical across all tabs, and
-// evolving over time (the server owns the sim clock; nothing local drives
-// it). Data-level convergence, the M27‒M34 precedent (no chrome).
+// exactly 51 entries (ALL ten species; slots
+// {0..4, 64..78, 128..130, 192..196, 256..260, 320..323, 384..389, 448..450,
+// 512..513, 576..578}), byte-identical across all tabs, and evolving over
+// time (the server owns the sim clock; nothing local drives it).
+// Data-level convergence, the M27‒M34 precedent (no chrome).
 //
 // Usage:
 //   # from ServerBase (branch feature/auto-milestones-20260914-215319):
@@ -33,9 +34,17 @@ const EXPECTED_SLOTS = [
   ...Array.from({ length: 15 }, (_, i) => 64 + i),
   128, 129, 130,
   ...Array.from({ length: 5 }, (_, i) => 192 + i),
+  ...Array.from({ length: 5 }, (_, i) => 256 + i),   /* M36: monkeys */
+  ...Array.from({ length: 4 }, (_, i) => 320 + i),   /* lizards */
+  ...Array.from({ length: 6 }, (_, i) => 384 + i),   /* snakes */
+  ...Array.from({ length: 3 }, (_, i) => 448 + i),   /* pelicans */
+  512, 513,                                            /* sharks */
+  ...Array.from({ length: 3 }, (_, i) => 576 + i),    /* spiders */
 ];
 const EXPECTED_TYPE = (slot) =>
-  slot < 64 ? 0 : slot < 128 ? 1 : slot < 192 ? 2 : 3;
+  slot < 64 ? 0 : slot < 128 ? 1 : slot < 192 ? 2 : slot < 256 ? 3
+  : slot < 320 ? 4 : slot < 384 ? 5 : slot < 448 ? 6 : slot < 512 ? 7
+  : slot < 576 ? 8 : 9;
 
 /* Extract the animals-section payload ([u32 count][count*24B]) from a raw
  * tick, walking the fixed section order (players, edits, animals). */
@@ -63,8 +72,8 @@ function animalsSection(buf) {
 
 function assertRoster(tag, sec) {
   const dv = new DataView(sec.buf.buffer, sec.buf.byteOffset, sec.buf.byteLength);
-  if (sec.count !== 28)
-    throw new Error(`${tag}: the server snapshot has ${sec.count} entries, expected 28`);
+  if (sec.count !== 51)
+    throw new Error(`${tag}: the server snapshot has ${sec.count} entries, expected 51`);
   for (let i = 0; i < sec.count; i++) {
     const o = 4 + i * ANIMAL_BYTES;
     const slot = dv.getUint16(o, true);
@@ -198,5 +207,5 @@ if (!evolved)
 console.log(`tab A: the snapshot evolved between snapshot #${evolvedPair[0]} and #${evolvedPair[1]}`);
 
 a.close(); b.close(); c.close();
-console.log('E2E_OK ‒ M35: 28-entry server animal snapshot, byte-identical across 3 tabs, evolving over time');
+console.log('E2E_OK ‒ M36: 51-entry server animal snapshot (all ten species), byte-identical across 3 tabs, evolving over time');
 process.exit(0);

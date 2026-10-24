@@ -1002,17 +1002,24 @@ function updateSchools(dt) {
     }
     s.x += (tx - s.x) * Math.min(1, dt * 0.9);
     s.z += (tz - s.z) * Math.min(1, dt * 0.9);
-    s.mesh.count = s.n;
-    for (let i = 0; i < s.n; i++) {
-      const a = s.phase + i * 2.399 + runT * (0.45 + (i % 4) * 0.12);
-      const rr = 1.0 + ((i * 0.53) % 2.4);
-      const fx = s.x + Math.cos(a) * rr;
-      const fz = s.z + Math.sin(a) * rr * 0.7;
-      const fh = Math.max(heightAt(fx, fz) + 0.25, WATER - 0.4);
-      const a2 = a + 0.08;
-      const fx2 = s.x + Math.cos(a2) * rr, fz2 = s.z + Math.sin(a2) * rr * 0.7;
-      setM(i, s.mesh, fx, fh, fz, 0, Math.atan2(fx2 - fx, fz2 - fz), 0, 1, 1, 1);
-    }
+    schoolPlace(s);   /* M36: per-fish instance loop (mp mode calls it too) */
+  }
+}
+/* M12: the per-fish instance placement around a school anchor (factored out
+   of updateSchools so the mp presentation pass can keep the instances
+   animating while the anchor itself is server-driven ‒ same math, bit-
+   identical single-player behaviour). */
+function schoolPlace(s) {
+  s.mesh.count = s.n;
+  for (let i = 0; i < s.n; i++) {
+    const a = s.phase + i * 2.399 + runT * (0.45 + (i % 4) * 0.12);
+    const rr = 1.0 + ((i * 0.53) % 2.4);
+    const fx = s.x + Math.cos(a) * rr;
+    const fz = s.z + Math.sin(a) * rr * 0.7;
+    const fh = Math.max(heightAt(fx, fz) + 0.25, WATER - 0.4);
+    const a2 = a + 0.08;
+    const fx2 = s.x + Math.cos(a2) * rr, fz2 = s.z + Math.sin(a2) * rr * 0.7;
+    setM(i, s.mesh, fx, fh, fz, 0, Math.atan2(fx2 - fx, fz2 - fz), 0, 1, 1, 1);
   }
 }
 
@@ -1515,6 +1522,14 @@ function panicWildlife(x, z) {
    before weather/sky on the previous frame's dayFactor; 'late' species
    (tigers, then gulls) run after updateSky. frame() keeps the M0-M11 order. */
 function updateAnimals(dt, phase) {
+  /* M36: with ?mp= connected, the SERVER simulates the full 51-animal roster
+     and every tick's bit2 carries it (M35, extended by M36 to all ten
+     species); the local sim is fully disabled on every tab, including the
+     authority. The meshes become server-driven puppets ‒ mpAnimalsFrame
+     (frame() after both phases) nudges the data fields + grp transforms,
+     mpAnimalsPresent keeps them alive (fish instances, grounded y, legs).
+     Without ?mp= mpApi stays null and this runs exactly as before. */
+  if (mpApi && mpApi.connected()) return;
   for (const sp of animals) if (sp.phase === phase) sp.step(dt);
 }
 /* M16: a small deterministic alarm bus (see PLAN.md §9: events scream/alert/attack) ‒
@@ -4536,7 +4551,8 @@ function frame(t) {
   updateAnimals(dt, 'late');    /* M12: tigers then gulls, after updateSky so dayFactor is fresh */
   audioTick(dt);     /* M23: bed gains + ambient cues + footsteps (read-only) */
   pt('animL');   /* M24: late animals + audio tick */
-  mpAnimalsFrame(dt);   /* M30: followers adopt the relayed animal snapshot */
+  mpAnimalsFrame(dt);   /* M35+: every tab adopts the server animal snapshot */
+  mpAnimalsPresent(dt); /* M36: puppet presentation (instances, grounded y, limbs) */
   updatePlants();     /* game-minute driven; dMin covers sleep jumps + T skip */
   hud.innerHTML = hudText.replace(/\n/g, '<br>');
   mapDraw(dt);   /* M18: throttled redraw while the paper map is open */
@@ -4728,18 +4744,19 @@ function mpWorldLockedGuard() {
   return true;
 }
 
-/* --------------------- multiplayer animals (M30, superseded by M35) ------
- * M35: the SERVER simulates the first four species (fish, crabs, tigers,
- * gulls = 28 animals) on its own clock and every tick's bit2 carries its
- * snapshot for all tabs; mpAnimalsFrame below adopts those transforms on
- * EVERY tab including the authority (M30's authority skip is gone). The
- * local sim keeps running for the six unported species (monkey, lizard,
- * snake, pelican, shark, spider) and for animation on the 28 slots.
- * The M30 upload side (authority relaying its own 51-entry roster 30 Hz)
- * stays in place until M40 retires it. Slot = type * 64 + populationIndex
- * (type = animal registry index): same world seed => same roster on every
- * client, so the mapping matches without transmission. Inert without ?mp=
- * (mpApi stays null), zero rng.
+/* --------------------- multiplayer animals (M30, superseded by M35/M36) ------
+ * M36: the SERVER simulates ALL 51 animals (the full ten-species registry)
+ * on its own clock and every tick's bit2 carries the full snapshot for all
+ * tabs; with ?mp= connected the client's local sim is fully disabled
+ * (updateAnimals gates on mpApi.connected()) and every tab, including the
+ * authority, renders server-driven puppets: mpAnimalsFrame adopts the
+ * transforms (x/z/yaw/y lerp, fish n from the state byte) and
+ * mpAnimalsPresent keeps the puppets alive (fish instances, grounded y,
+ * legs/wings). The M30 upload side (authority relaying its own 51-entry
+ * roster 30 Hz) stays in place until M40 retires it. Slot =
+ * type * 64 + populationIndex (type = animal registry index): same world
+ * seed => same roster on every client, so the mapping matches without
+ * transmission. Inert without ?mp= (mpApi stays null), zero rng.
  */
 let mpAnimalRosterCache = null;
 function mpAnimalRoster() {
@@ -4776,14 +4793,15 @@ function mpCollectAnimals() {
   return out;
 }
 /* Snapshot apply (called once per frame after both animal phases): the
- * SERVER's animal snapshot (M35) overwrites local state for whatever slots
- * it carries (the 28 server-simulated animals; absent slots are untouched).
- * Data fields (x/z/dir) are nudged first so the local sim's own grp sync
- * follows the server, then grp is aligned directly (M28-style lerp;
- * shortest-arc yaw). All tabs adopt it, including the authority (M35
- * removed the M30 authority skip). Dead relays hide the mesh but never
- * force it visible (local hides, e.g. crabs fleeing a hunting lizard,
- * must keep working). */
+ * SERVER's animal snapshot (M35, extended by M36 to ALL 51 animals) overwrites
+ * local state for whatever slots it carries (M36: all of them; absent slots
+ * are untouched). Data fields (x/z/dir) are nudged first, then grp is aligned
+ * directly (M28-style lerp; shortest-arc yaw; M36 also lerps grp y so the
+ * pelican's altitude and the shark's depth follow the server's absolute y).
+ * All tabs adopt it, including the authority (M35 removed the M30 authority
+ * skip). Dead relays hide the mesh but never force it visible. Fish schools
+ * take their live count from the state byte (M36: state = n, 0..12, after a
+ * pelican's deep dive depletes the roster on the server side). */
 function mpAnimalsFrame(dt) {
   if (!mpApi || !mpApi.connected()) return;
   const map = mpApi.animals;
@@ -4797,7 +4815,7 @@ function mpAnimalsFrame(dt) {
     if (r.isSchool) {
       e.x += (a.x - e.x) * k;
       e.z += (a.z - e.z) * k;
-      if (a.dead && e.n > 0) { e.n = 0; if (e.mesh) e.mesh.count = 0; }
+      e.n = a.state;   /* M36: state byte = live fish count (0..12) */
       continue;
     }
     if (typeof e.x === 'number') e.x += (a.x - e.x) * k;
@@ -4810,9 +4828,57 @@ function mpAnimalsFrame(dt) {
     if (!g) continue;
     g.position.x += (a.x - g.position.x) * k;
     g.position.z += (a.z - g.position.z) * k;
+    g.position.y += (a.y - g.position.y) * k;   /* M36: altitude/depth */
     const dy = a.yaw - g.rotation.y;
     g.rotation.y += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;
     if (a.dead) g.visible = false;
+  }
+}
+/* M36: the mp presentation pass (runs only on connected tabs, right after
+ * mpAnimalsFrame): with the local sim disabled, this keeps the puppets alive.
+ * Schools run the factored per-fish instance loop (schoolPlace ‒ the same
+ * math as single-player, so the fish still swirl). Grounded species (crab,
+ * tiger, monkey, lizard, snake, spider) snap y to the terrain under the
+ * server's x/z; the gull adds GULL_ALT; pelican and shark keep the y that
+ * mpAnimalsFrame just lerped (server altitude/depth). Legs and wings swing
+ * from an estimated speed: per-frame displacement of the adopted data
+ * fields, > 0.05 means moving. Zero rng, zero single-player change. */
+function mpAnimalsPresent(dt) {
+  if (!mpApi || !mpApi.connected()) return;
+  const map = mpApi.animals;
+  if (!map || map.size === 0) return;
+  const inv = dt > 0 ? 1 / dt : 0;
+  for (const r of mpAnimalRoster()) {
+    const e = r.pop[r.i];
+    if (!e) continue;
+    if (r.isSchool) { schoolPlace(e); continue; }
+    if (typeof e.x !== 'number') continue;
+    const sp = Math.hypot(e.x - (e._px || e.x), e.z - (e._pz || e.z)) * inv;
+    e._px = e.x; e._pz = e.z;
+    const g = e.grp;
+    if (!g) continue;
+    if (r.id === 'gull')
+      g.position.set(e.x, heightAt(e.x, e.z) + GULL_ALT, e.z);
+    else if (r.id !== 'pelican' && r.id !== 'shark')
+      g.position.set(e.x, heightAt(e.x, e.z), e.z);
+    else
+      g.position.set(e.x, g.position.y, e.z);   /* y just lerped in mpAnimalsFrame */
+    g.rotation.y = e.dir;
+    if (e.wingL) {   /* gull (16, 0.5/0.1) and pelican (12, 0.55/0.08) */
+      const flap = sp > 0.05
+        ? Math.sin(runT * (r.id === 'pelican' ? 12 : 16) + (e.phase || 0)) * (r.id === 'pelican' ? 0.55 : 0.5)
+        : (r.id === 'pelican' ? 0.08 : 0.1);
+      e.wingL.rotation.z = flap;
+      e.wingR.rotation.z = -flap;
+    } else if (r.id === 'spider' && e.legs) {
+      for (let i = 0; i < e.legs.length; i++) {
+        const side = i < 4 ? -1 : 1, li = i % 4;
+        e.legs[i].rotation.z = sp > 0.05 ? side * Math.sin(runT * 8 + li * 1.7) * 0.3 : 0;
+      }
+    } else if (e.legs) {
+      for (let i = 0; i < e.legs.length; i++)
+        e.legs[i].rotation.x = sp > 0.05 ? Math.sin(runT * 9 + i * 1.7) * 0.5 : 0;
+    }
   }
 }
 

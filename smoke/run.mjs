@@ -4606,14 +4606,16 @@ patched += `
   globalThis.clearInterval = h => { if (h) h.on = false; };
   globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
 
-  /* snapshot every animal the block can touch (M30 pattern) */
+  /* snapshot every animal the block can touch (M30 pattern; gy since M36
+     added the grp y lerp) */
   const saveAnimals = [];
   for (const sp of animals)
     for (const e of sp.pop) {
       const rec = { x: e.x, z: e.z, dir: e.dir, n: e.n, alive: e.alive };
       if (e.mesh) rec.meshCount = e.mesh.count;
-      if (e.grp) { rec.gx = e.grp.position.x; rec.gz = e.grp.position.z;
-        rec.ry = e.grp.rotation.y; rec.vis = e.grp.visible; }
+      if (e.grp) { rec.gx = e.grp.position.x; rec.gy = e.grp.position.y;
+        rec.gz = e.grp.position.z; rec.ry = e.grp.rotation.y;
+        rec.vis = e.grp.visible; }
       saveAnimals.push(rec);
     }
   const saveGameMin = gameMin, saveStarted = started, saveDead = dead;
@@ -4764,8 +4766,225 @@ patched += `
         e.x = rec.x; e.z = rec.z; e.dir = rec.dir; e.n = rec.n; e.alive = rec.alive;
         if (rec.meshCount !== undefined && e.mesh) e.mesh.count = rec.meshCount;
         if (e.grp) {
-          e.grp.position.x = rec.gx; e.grp.position.z = rec.gz;
-          e.grp.rotation.y = rec.ry; e.grp.visible = rec.vis;
+          e.grp.position.x = rec.gx; e.grp.position.y = rec.gy;
+          e.grp.position.z = rec.gz; e.grp.rotation.y = rec.ry;
+          e.grp.visible = rec.vis;
+        }
+      }
+    gameMin = saveGameMin;
+    mpTimeAdopt = 0;
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+  }
+}
+
+/* ---- M36: the full 51-animal roster is server-simulated; mp mode disables
+   the local sim (updateAnimals gates on mpApi.connected()) and the bit2
+   snapshot is the only thing that moves animals; mpAnimalsPresent keeps the
+   puppets alive (fish instances via schoolPlace, grounded y from heightAt,
+   gull +GULL_ALT, pelican/shark y from the just-lerped snapshot, limbs from
+   the estimated speed). Without ?mp= the single-player path is untouched. */
+{
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  const saveAnimals = [];
+  for (const sp of animals)
+    for (const e of sp.pop) {
+      const rec = { x: e.x, z: e.z, dir: e.dir, n: e.n, alive: e.alive };
+      if (e.mesh) rec.meshCount = e.mesh.count;
+      if (e.grp) { rec.gx = e.grp.position.x; rec.gy = e.grp.position.y;
+        rec.gz = e.grp.position.z; rec.ry = e.grp.rotation.y;
+        rec.vis = e.grp.visible; }
+      saveAnimals.push(rec);
+    }
+  const saveGameMin = gameMin, saveStarted = started, saveDead = dead;
+  const saveWon = won, saveOnRaft = onRaft;
+  const m0 = monkeys[0], g0 = gulls[0], sh0 = sharks[0], pel0 = pelicans[0], sp0 = spiders[0];
+
+  try {
+    /* 1. single-player: updateAnimals still steps the full ten-species
+       registry (mpApi is null, the gate is open) */
+    if (mpApi !== null) throw new Error('M36: mpApi leaked in from the M35 block');
+    started = true; dead = false;
+    const before = { x: m0.x, z: m0.z, dir: m0.dir };
+    updateAnimals(0.1, 'early');
+    updateAnimals(0.1, 'late');
+    if (m0.x === before.x && m0.z === before.z && m0.dir === before.dir)
+      throw new Error('M36: single-player updateAnimals no longer steps the monkeys');
+
+    /* 2. connect + join success (the M27/M35 FakeWS pattern) */
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M36Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+    });
+    mpApi = api;
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M36: the join success was not parsed');
+
+    /* 3. while connected the local sim is FULLY disabled: a frame pump does
+       not advance a single data field of the 51 animals */
+    const frozen = [];
+    for (const sp of animals)
+      for (const e of sp.pop)
+        frozen.push([e, e.x, e.z, e.dir, e.n]);
+    updateAnimals(0.1, 'early');
+    updateAnimals(0.1, 'late');
+    frozen.forEach(([e, x, z, d, n], i) => {
+      if (e.x !== x || e.z !== z || (typeof d === 'number' && e.dir !== d) || e.n !== n)
+        throw new Error('M36: updateAnimals mutated animal ' + i + ' while connected');
+    });
+
+    /* 4. a 51-entry tick: all ten bands, the registry type per slot, and the
+       fish state byte = the live count (the M36 extension of the state bit) */
+    const slotOf = {};
+    for (const r of mpAnimalRoster()) slotOf[r.slot] = r;
+    const bands = [[schools, 0], [crabs, 64], [tigers, 128], [gulls, 192],
+                   [monkeys, 256], [lizards, 320], [snakes, 384], [pelicans, 448],
+                   [sharks, 512], [spiders, 576]];
+    const fishN = [9, 7, 5, 3, 1];
+    const entries = [];
+    let fishI = 0;
+    for (const [pop, base] of bands)
+      for (let i = 0; i < pop.length; i++) {
+        const slot = base + i;
+        const r = slotOf[slot];
+        if (!r) throw new Error('M36: no roster entry for slot ' + slot);
+        const far =
+          slot === 256 ? [35, -30, 0, 0.9] :     /* monkey 0: the new band adopts */
+          slot === 576 ? [-45, 30, 0, 2.0] :     /* spider 0 */
+          slot === 512 ? [20, 10, -0.5, 0.4] :   /* shark 0: depth adoption */
+          slot === 448 ? [5, -40, 9.5, -0.3] :   /* pelican 0: altitude adoption */
+          null;
+        const st = r.type === 0 ? fishN[fishI++] : 0;
+        entries.push(far
+          ? { slot: slot, type: r.type, x: far[0], y: far[2], z: far[1], yaw: far[3], state: st }
+          : { slot: slot, type: r.type, x: 12.5 + slot * 0.001, y: 0,
+              z: -8.25 + slot * 0.001, yaw: 0.1, state: st });
+      }
+    if (entries.length !== 51)
+      throw new Error('M36: the roster must be 51 animals, got ' + entries.length);
+    const sendAnimalsTick = (auth, tickEntries) => {
+      const u32b = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; };
+      const parts = [new Uint8Array([27, 0x04]), u32b(auth), u32b(tickEntries.length)];
+      for (const a of tickEntries) {
+        const b = new Uint8Array(24);
+        const dv = new DataView(b.buffer);
+        dv.setUint16(0, a.slot, true);
+        b[2] = a.type; b[3] = 0;
+        dv.setFloat32(4, a.x, true); dv.setFloat32(8, a.y, true);
+        dv.setFloat32(12, a.z, true); dv.setFloat32(16, a.yaw, true);
+        b[20] = a.state & 0xFF;   /* M36: the raw state byte (fish = live n) */
+        parts.push(b);
+      }
+      const total = parts.reduce((s, q) => s + q.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const q of parts) { buf.set(q, off); off += q.length; }
+      wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
+    };
+
+    /* 5. this tab IS the authority and the full snapshot parses */
+    sendAnimalsTick(110, entries);
+    if (api.isAuthority() !== true)
+      throw new Error('M36: the tab is not recognized as the authority');
+    if (api.animals.size !== 51)
+      throw new Error('M36: api.animals must hold the 51 server entries, got ' + api.animals.size);
+    for (const e of entries)
+      if (!api.animals.has(e.slot))
+        throw new Error('M36: slot ' + e.slot + ' missing from the parsed snapshot');
+
+    /* 6. the M30 upload side is untouched: the 30 Hz loop still relays the
+       authority's own FULL 51-entry roster as type 29 (retired at M40) */
+    intervals[0].fn();
+    {
+      const up = wsInstances[0].sent.slice(-10)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)))
+        .find((d) => d[0] === 29);
+      if (!up) throw new Error('M36: the authority loop no longer uploads type 29');
+      const cnt = new DataView(up.buffer, up.byteOffset).getUint32(1, true);
+      if (cnt !== 51 || up.length !== 1 + 4 + 51 * 24)
+        throw new Error('M36: the type-29 upload has ' + cnt + ' entries (want 51), length ' + up.length);
+    }
+
+    /* 7. all ten bands ADOPT the server transforms: the four far targets
+       converge, the two new bands join, the shark takes the server depth
+       and the pelican the server altitude (the M36 y lerp), and every fish
+       school takes its live count from the state byte */
+    for (const [name, e] of [['monkey', m0], ['spider', sp0], ['shark', sh0], ['pelican', pel0]])
+      if (!e.grp) throw new Error('M36: no grp on the ' + name + ' to adopt');
+    for (let i = 0; i < 60; i++) mpAnimalsFrame(0.1);
+    if (Math.abs(m0.x - 35) > 1e-3 || Math.abs(m0.z - -30) > 1e-3)
+      throw new Error('M36: the monkey did not adopt the server transform: (' + m0.x + ', ' + m0.z + ')');
+    if (Math.abs(sp0.x - -45) > 1e-3 || Math.abs(sp0.z - 30) > 1e-3)
+      throw new Error('M36: the spider did not adopt the server transform');
+    if (Math.abs(sh0.grp.position.y - -0.5) > 1e-3)
+      throw new Error('M36: the shark did not adopt the server depth (y ' + sh0.grp.position.y + ')');
+    if (Math.abs(pel0.grp.position.y - 9.5) > 1e-3)
+      throw new Error('M36: the pelican did not adopt the server altitude (y ' + pel0.grp.position.y + ')');
+    schools.forEach((s, i) => {
+      if (s.n !== fishN[i])
+        throw new Error('M36: school ' + i + ' did not take the live count from the state byte: ' + s.n);
+    });
+
+    /* 8. the presentation pass: fish instances refresh their count, the
+       grounded species snap to the terrain under the server x/z, the gull
+       adds GULL_ALT, the pelican/shark keep the just-lerped y, the limbs
+       animate (finite) */
+    mpAnimalsPresent(0.1);
+    if (schools[0].mesh.count !== schools[0].n)
+      throw new Error('M36: schoolPlace did not refresh the instance count');
+    if (Math.abs(m0.grp.position.y - heightAt(m0.x, m0.z)) > 1e-6)
+      throw new Error('M36: the monkey is not on the terrain under the server x/z');
+    if (Math.abs(g0.grp.position.y - (heightAt(g0.x, g0.z) + GULL_ALT)) > 1e-6)
+      throw new Error('M36: the gull is not at heightAt + GULL_ALT');
+    if (Math.abs(sh0.grp.position.y - -0.5) > 1e-3)
+      throw new Error('M36: mpAnimalsPresent moved the shark out of its lerped depth');
+    if (!Number.isFinite(m0.legs[0].rotation.x))
+      throw new Error('M36: the monkey leg animation is not finite');
+
+    /* 9. back to single-player: the local sim steps again */
+    api.close();
+    mpApi = null;
+    const after = { x: m0.x, z: m0.z };
+    updateAnimals(0.1, 'early');
+    updateAnimals(0.1, 'late');
+    if (m0.x === after.x && m0.z === after.z)
+      throw new Error('M36: single-player updateAnimals stopped stepping after disconnect');
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    let ai = 0;
+    for (const sp of animals)
+      for (const e of sp.pop) {
+        const rec = saveAnimals[ai++];
+        e.x = rec.x; e.z = rec.z; e.dir = rec.dir; e.n = rec.n; e.alive = rec.alive;
+        if (rec.meshCount !== undefined && e.mesh) e.mesh.count = rec.meshCount;
+        if (e.grp) {
+          e.grp.position.x = rec.gx; e.grp.position.y = rec.gy;
+          e.grp.position.z = rec.gz; e.grp.rotation.y = rec.ry;
+          e.grp.visible = rec.vis;
         }
       }
     gameMin = saveGameMin;
