@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, protocol, serverbase]
 created: "2026-10-18T05:02:17"
-updated: "2026-10-24T16:59:43"
+updated: "2026-10-24T14:42:32"
 ---
 
 <!-- compiled_truth -->
@@ -36,7 +36,13 @@ M27 ships the `VibeSurvivorsPlugin` in `../ServerBase` (branch `feat/vibecraft-s
 
 ## Shipped / reserved for later
 
-M28 shipped: presence rendering (remote avatars + name tags from `remotes`) ‒ [[m28-mp-presence]]. M29 shipped: shared deterministic world state ‒ world edits + authority clock, full edit-history catch-up for late joiners, follower mutation lock-out ‒ [[m29-mp-world-state]]. M30 shipped: animals ‒ the authority's full animal roster relayed on tick bit2, follower snapshot overwrite, events-carrying transforms ‒ [[m30-mp-animals]]. M31: reconnect/integration hardening.
+M28 shipped: presence rendering (remote avatars + name tags from `remotes`) ‒ [[m28-mp-presence]]. M29 shipped: shared deterministic world state ‒ world edits + authority clock, full edit-history catch-up for late joiners, follower mutation lock-out ‒ [[m29-mp-world-state]]. M30 shipped: animals ‒ the authority's full animal roster relayed on tick bit2, follower snapshot overwrite, events-carrying transforms ‒ [[m30-mp-animals]]. M31 shipped: reconnect hardening + the 3-tab no-divergence gate (`5701e4b`) ‒ the client's 30 Hz state upload is the server's **only** authority-liveness signal, so the `MSG_JOIN_SUCCESS` handler restarts the uplink (`if (sendTimer === 0) sendStateLoop()`, idempotent; the one client-side gap was that the loop started exactly once at attach and `ws.onclose` cleared the interval, leaving the uplink dead after any real reconnect); the server side was already complete (full type-30 `EDIT_SYNC` replay on every (re)join, the 30 s grace window keeps the join-order position so the original authority returns, authority = first join-order client with state fresh <5 s re-evaluated every tick). The 3-tab render gate stays human-operated: https://localhost:3003/?mp=localhost:3003.
+
+## Known v1 limitations (documented, not fixed)
+
+- The server keeps a departed client's last state in the tick for the 30 s reconnect grace (no 'left' flag).
+- A **server restart** wipes the edit history while clients keep their applied edits (server-restart resilience is the M40 item, see [[v3-server-authoritative]]).
+- A follower's local-only animal interactions are transient (33 ms re-assert).
 
 
 ## Timeline
@@ -80,4 +86,10 @@ M28 shipped: presence rendering (remote avatars + name tags from `remotes`) ‒ 
 - time: 2026-10-24T16:59:43
   kind: reversal
   summary: "Pivot: user directed the server is master of everything (animals, players, trees locations/rotations). The v2 first-client-authority relay model is superseded by the v3 server-authoritative model (previously 'future, NOT now'); see [[v3-server-authoritative]]. Relay-era protocol facts remain valid wire history."
+  affects: [vivsurvivors-mp-relay]
+
+- time: 2026-10-24T14:42:32
+  kind: decision
+  summary: "M31 shipped: client uplink restart on MSG_JOIN_SUCCESS (state uploads are the server's authority-liveness signal); documented known v1 limitations (departed-state 30s grace hold, server-restart edit-history wipe, transient follower animal interactions)"
+  source: "brain sync pass: commit 5701e4b (M31)"
   affects: [vivsurvivors-mp-relay]
