@@ -4484,6 +4484,102 @@ patched += `
     globalThis.setTimeout = realSetTimeout;
   }
 }
+
+/* ---- M34: mp world built from the server placement block (type 33) ----
+   The smoke page is non-mp (location.search = ''), so the immediate local
+   builds ran at load; we then feed a MODIFIED synthetic payload to
+   mpBuildWorld and assert the world arrays reflect the payload (consumption,
+   not byte-identity), that the build is once-guarded, and restore the local
+   world. This block is last: no earlier assertion may see the synthetic. */
+{
+  if (MP_ON !== false) throw new Error('M34: the smoke page must be non-mp');
+  if (mpWorldBuilt !== false) throw new Error('M34: mpWorldBuilt must start false (non-mp)');
+  if (palms.length < 60 || bigTrees.length < 60 || rocks.length < 100)
+    throw new Error('M34: the immediate non-mp local build did not run');
+  const snap = {
+    palms: JSON.parse(JSON.stringify(palms)),
+    bigTrees: JSON.parse(JSON.stringify(bigTrees)),
+    rocks: JSON.parse(JSON.stringify(rocks)),
+    plants: JSON.parse(JSON.stringify(plants)),
+  };
+  const nP = palms.length, nT = bigTrees.length, nR = rocks.length, nPl = plants.length;
+
+  /* modified synthetic payload: counts/positions differ from local gen */
+  const w = {
+    seed: 1337,
+    palms: [
+      { x: 1.5, z: -2.25, groundH: 3.5, trunkH: 4.25, tx: 0.2, tz: -0.15 },
+      { x: -3.75, z: 4.5, groundH: 1.25, trunkH: 3.75, tx: -0.1, tz: 0.3 },
+      { x: 0, z: 7.125, groundH: 5.5, trunkH: 5.5, tx: 0, tz: 0 },
+    ],
+    trees: [
+      { x: 8.25, z: -9.5, groundH: 10.75, trunkH: 8.5, canopyS: 3.25,
+        off: [0.55, 0.65, 0.75], len: [2.25, 3.75, 5.25] },
+      { x: -11.5, z: 12.25, groundH: 13.5, trunkH: 6.75, canopyS: 2.85,
+        off: [0.9, 0.5, 0.55], len: [2, 2.5, 5.5] },
+    ],
+    rocks: [
+      { x: 16.5, z: -17.75, groundH: 15.25, s: 1.35, sy: 1.1 },
+      { x: -1.25, z: 0.75, groundH: 0.5, s: 0.55, sy: 0.6 },
+    ],
+    species: [{ key: 'fiber', pts: [
+      { x: 10.5, z: 11.25, h: 2.5 }, { x: 12.75, z: 13.5, h: 3.5 },
+      { x: 14.25, z: 15.75, h: 4.5 },
+    ] }],
+  };
+  mpBuildWorld(w);
+  if (mpWorldBuilt !== true) throw new Error('M34: mpWorldBuilt not set');
+  if (palms.length !== 3 || bigTrees.length !== 2 || rocks.length !== 2 || plants.length !== 3)
+    throw new Error('M34: arrays were not replaced: ' + palms.length + '/' + bigTrees.length
+      + '/' + rocks.length + '/' + plants.length);
+  {
+    const p0 = palms[0];
+    if (p0.h !== 4.25) throw new Error('M34: palm h must be trunkH (M44 quirk): ' + p0.h);
+    if (p0.top[0] !== 1.5 + 0.2 * 4.25 * 0.98 || p0.top[1] !== 3.5 + 4.25
+        || p0.top[2] !== -2.25 - 0.15 * 4.25 * 0.98)
+      throw new Error('M34: palm top not recomputed: ' + JSON.stringify(p0.top));
+    if (p0.cocos !== 2 || p0.idx !== 0 || palms[2].idx !== 2)
+      throw new Error('M34: palm cocos/idx wrong');
+    const t0 = bigTrees[0];
+    if (t0.h !== 10.75 || t0.th !== 8.5 || t0.cs !== 3.25
+        || t0.loff[1] !== 0.65 || t0.llen[2] !== 5.25)
+      throw new Error('M34: big tree entry wrong: ' + JSON.stringify(t0));
+    if (bigTrees[1].cs !== 2.85 || bigTrees[1].loff[0] !== 0.9)
+      throw new Error('M34: second big tree entry wrong');
+    if (rocks[0].h !== 15.25 || rocks[0].s !== 1.35 || rocks[0].sy !== 1.1)
+      throw new Error('M34: rock entry wrong: ' + JSON.stringify(rocks[0]));
+    if (rocks[1].s !== 0.55 || rocks[1].sy !== 0.6)
+      throw new Error('M34: second rock entry wrong');
+    if (!plants.every((p) => p.type === 'fiber'))
+      throw new Error('M34: plant types wrong');
+    for (let i = 0; i < 3; i++) {
+      const p = plants[i], frac = (((i + 1) * 7919) % 100) / 100;
+      const ready = frac < 0.45;
+      if (p.x !== w.species[0].pts[i].x || p.h !== w.species[0].pts[i].h)
+        throw new Error('M34: plant position wrong: ' + JSON.stringify(p));
+      if (p.state !== (ready ? 'ready' : 'growing')
+          || p.min !== (ready ? 0 : frac * 1440 * PLANT_TYPES.fiber.regrowDays))
+        throw new Error('M34: plant state/min not index-derived: ' + JSON.stringify(p));
+      if (p.chargesLeft !== PLANT_TYPES.fiber.charges || p.si !== i || p.idx !== i
+          || p.wear !== 1 || p.s !== 0.75 + ((i * 37) % 13) / 25)
+        throw new Error('M34: plant derived fields wrong: ' + JSON.stringify(p));
+    }
+  }
+  /* build-once: rejoin re-sends the block; duplicates and nulls are ignored */
+  mpBuildWorld(w);
+  if (palms.length !== 3) throw new Error('M34: duplicate world block was not ignored');
+  mpBuildWorld(null);
+  if (palms.length !== 3) throw new Error('M34: null world block was not ignored');
+
+  /* restore the local world (this block is last; kept clean for SMOKE_OK) */
+  palms.length = 0; snap.palms.forEach((e) => palms.push(e));
+  bigTrees.length = 0; snap.bigTrees.forEach((e) => bigTrees.push(e));
+  rocks.length = 0; snap.rocks.forEach((e) => rocks.push(e));
+  plants.length = 0; snap.plants.forEach((e) => plants.push(e));
+  buildIslandMeshes(); buildPlantMeshes(); emitAllPlants();
+  if (palms.length !== nP || bigTrees.length !== nT || rocks.length !== nR || plants.length !== nPl)
+    throw new Error('M34: restore failed');
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);

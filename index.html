@@ -274,6 +274,15 @@ function scatter(n, hmin, hmax, minDist, maxAttempts = 4000) {
 }
 
 /* ---------------- vegetation ---------------- */
+/* M34: a ?mp= page renders the vegetation from the server's type-33
+   placement block (mpBuildWorld) instead of the immediate local builds
+   below. The spawn loops themselves still run in mp mode, so the global
+   rng stream is consumed identically to single-player (bit-identical
+   animal spawns + the rng-ordering invariant); only the mesh build is
+   deferred until the payload arrives. (Kept outside the dump harness's
+   extracted generation regions, ServerBase/tests/vivs_world_dump.mjs.) */
+const MP_ON = new URLSearchParams(location.search).has('mp');
+let mpWorldBuilt = false;
 
 const palms = [];   /* {x,z,h, tx,tz, top, cocos, idx} */
 let cocosMesh = null;   /* instanced crown coconuts; hidden per-palm as they drop */
@@ -333,7 +342,10 @@ function makeLod(grp, w, h, d, color) {
   return lod;
 }
 
-{
+/* M34: wrapped so the mp page can rebuild from the server payload
+   (mpBuildWorld); mp entries carry cs/loff/llen/s/sy and take the
+   server values instead of the local rng draws (see fallbacks below). */
+function buildIslandMeshes() {
   /* palm trunks */
   const trunkGeo = new THREE.CylinderGeometry(0.14, 0.3, 1, 5);
   trunkGeo.translate(0, 0.5, 0);
@@ -386,7 +398,7 @@ function makeLod(grp, w, h, d, color) {
   const cans = addInstanced(canGeo, canMat, bigTrees.length * 3);
   let ci = 0;
   for (const t of bigTrees) {
-    const s = 2.6 + rng() * 1.2, top = t.h + t.th;
+    const s = t.cs !== undefined ? t.cs : 2.6 + rng() * 1.2, top = t.h + t.th;
     setM(ci++, cans, t.x, top - 0.6, t.z, 0, t.x * 0.7, 0, s, s * 0.8, s);
     setM(ci++, cans, t.x + s * 0.5, top - 1.8, t.z + s * 0.3, 0, 0, 0, s * 0.8, s * 0.7, s * 0.8);
     setM(ci++, cans, t.x - s * 0.45, top - 1.5, t.z - s * 0.35, 0, 0, 0, s * 0.75, s * 0.65, s * 0.75);
@@ -399,8 +411,8 @@ function makeLod(grp, w, h, d, color) {
   let li = 0;
   for (const t of bigTrees) {
     for (let k = 0; k < 3; k++) {
-      const off = 0.5 + rng() * 0.5;
-      const len = 2 + rng() * 3.5;
+      const off = t.loff ? t.loff[k] : 0.5 + rng() * 0.5;
+      const len = t.llen ? t.llen[k] : 2 + rng() * 3.5;
       const ax = Math.cos(k * 2.1 + t.z) * off, az = Math.sin(k * 2.1 + t.x) * off;
       setM(li++, lianas, t.x + ax, t.h + t.th - len, t.z + az, 0, 0, 0, 1, len, 1);
     }
@@ -412,10 +424,12 @@ function makeLod(grp, w, h, d, color) {
   const rockMesh = addInstanced(rockGeo, rockMat, rocks.length);
   for (let i = 0; i < rocks.length; i++) {
     const r = rocks[i];
-    const s = 0.4 + rng() * 1.2;
-    setM(i, rockMesh, r.x, r.h - 0.1, r.z, 0, r.x * 1.3, 0, s, s * (0.7 + rng() * 0.5), s);
+    const s = r.s !== undefined ? r.s : 0.4 + rng() * 1.2;
+    setM(i, rockMesh, r.x, r.h - 0.1, r.z, 0, r.x * 1.3, 0, s,
+      r.sy !== undefined ? r.sy : s * (0.7 + rng() * 0.5), s);
   }
 }
+if (!MP_ON) buildIslandMeshes();   /* M34: mp builds this from the server payload */
 
 /* ---------------- vegetation: plant system (M7) ----------------
    Reusable framework: one PLANT_TYPES data row per species (M8/M9 add
@@ -557,7 +571,9 @@ const plantMesh = {};  /* kind -> InstancedMesh(es) */
    species gets a contiguous base offset (in species iteration order, so
    fiber stays base 0 in its kind); every plant stores its absolute slot.
    Two same-kind species never share a slot. */
-{
+/* M34: wrapped like buildIslandMeshes ‒ slot allocation reads the current
+   plants array, so the mp page re-runs it after the payload replaces it. */
+function buildPlantMeshes() {
   const kindTotals = { tuft: 0, shrub: 0, flower: 0 };
   const slotBase = {};
   let base = 0;
@@ -620,7 +636,8 @@ function emitPlant(p) {
     if (plantMesh.head.instanceColor) plantMesh.head.instanceColor.needsUpdate = true;
   }
 }
-for (const p of plants) emitPlant(p);
+function emitAllPlants() { for (const p of plants) emitPlant(p); }
+if (!MP_ON) { buildPlantMeshes(); emitAllPlants(); }   /* M34: mp does this after the payload */
 
 /* growth: growing -> ready (regrowDays), ready -> (harvest charges) ->
    depleted -> long regrow (regrowDays) -> growing (charges reset). */
@@ -632,6 +649,7 @@ function plantGrowthMult(minA, minB) { return 1 + (RAIN_GROWTH - 1) * rainFrac(m
    deterministic; never touches the spawn rng). */
 const PLANT_WEAR_STEP = 0.5, PLANT_WEAR_MAX = 3;
 function updatePlants() {
+  if (MP_ON && !mpWorldBuilt) return;  /* M34: plantMesh is unallocated until the server payload */
   const dMin = gameMin - plantClock;
   if (dMin <= 0) { plantClock = gameMin; return; }
   const prev = plantClock;
@@ -4641,7 +4659,7 @@ function mpApplyWorldEdit(kind, entityIndex, payload) {
   if (!payload || kind > 7) return;
   if (kind === 0) {              /* palm: hide the dropped crowns (no falling items on replay) */
     const p = palms[entityIndex];
-    if (!p) return;
+    if (!p || !cocosMesh) return;  /* M34: mp crowns unallocated until the world payload */
     const c = Math.min(2, payload[0] & 0xff);
     if (p.cocos <= c) { p.cocos = c; return; }
     for (let n = p.cocos; n > c; n--)
@@ -4651,7 +4669,7 @@ function mpApplyWorldEdit(kind, entityIndex, payload) {
   }
   if (kind === 1) {              /* plant: mirror the local harvest exactly */
     const pl = plants[entityIndex];
-    if (!pl) return;
+    if (!pl || (MP_ON && !mpWorldBuilt)) return;  /* M34: plantMesh unallocated pre-payload */
     const cl = payload[0] & 0xff;
     if (pl.chargesLeft === cl) return;
     pl.chargesLeft = cl;
@@ -4794,6 +4812,53 @@ function mpAnimalsFrame(dt) {
   }
 }
 
+/* ----------------------- M34: server-authoritative island (mp only) -----------------------
+ * With ?mp=, replace the local scatter/plant spawn data with the server's
+ * type-33 placement block (M33) the first time it arrives, then build the
+ * instanced vegetation meshes from it. The local spawn loops still ran at
+ * load (same rng stream as single-player), so the payload is byte-identical
+ * to local gen today; consuming it is what future server world mutations
+ * flow through. Rejoin re-sends the same block; the build-once guard
+ * ignores duplicates (rebuilding would reset cocos/charges).
+ * Entry shapes mirror the local spawn: palm h = trunkH (spread-overwrite
+ * semantics, M44's floating-palm quirk replicated on purpose), rock sy =
+ * the FINAL y-scale per WorldGen.hpp, big-tree cs/loff/llen = server draws.
+ */
+function mpBuildWorld(w, force) {
+  if (!w || (mpWorldBuilt && !force)) return;
+  palms.length = 0;
+  for (let i = 0; i < w.palms.length; i++) {
+    const p = w.palms[i];
+    palms.push({ x: p.x, z: p.z, h: p.trunkH, tx: p.tx, tz: p.tz,
+      top: [p.x + p.tx * p.trunkH * 0.98, p.groundH + p.trunkH,
+            p.z + p.tz * p.trunkH * 0.98], cocos: 2, idx: i });
+  }
+  bigTrees.length = 0;
+  for (const t of w.trees)
+    bigTrees.push({ x: t.x, z: t.z, h: t.groundH, th: t.trunkH,
+                   cs: t.canopyS, loff: t.off, llen: t.len });
+  rocks.length = 0;
+  for (const r of w.rocks) rocks.push({ x: r.x, z: r.z, h: r.groundH, s: r.s, sy: r.sy });
+  plants.length = 0;
+  for (const key of Object.keys(PLANT_TYPES)) {
+    const sp = w.species.find(s => s.key === key) || { pts: [] };
+    const def = PLANT_TYPES[key];
+    const regrowMin = def.regrowDays * 1440;
+    for (let i = 0; i < sp.pts.length; i++) {
+      const frac = (((i + 1) * 7919) % 100) / 100;
+      plants.push({
+        type: key, x: sp.pts[i].x, z: sp.pts[i].z, h: sp.pts[i].h,
+        state: frac < 0.45 ? 'ready' : 'growing',
+        min: frac < 0.45 ? 0 : frac * regrowMin,
+        chargesLeft: def.charges, si: i, idx: plants.length, wear: 1,
+        s: 0.75 + ((i * 37) % 13) / 25,
+      });
+    }
+  }
+  buildIslandMeshes(); buildPlantMeshes(); emitAllPlants();
+  mpWorldBuilt = true;
+}
+
 /* ----------------------- multiplayer (optional, M27) -----------------------
  * Append ?mp=host:port to the URL to connect to a VibeSurvivors relay server
  * (ServerBase/VibeSurvivorsPlugin). Without it the game runs exactly as
@@ -4854,6 +4919,8 @@ function mpAnimalsFrame(dt) {
       rig, url: mpUrl, seed: SEED,
       displayName: await askMpName(),
       inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
+      /* M34: build the vegetation world from the server's placement block */
+      onWorld: (w) => mpBuildWorld(w),
       /* M29: shared deterministic world state */
       gameMin: () => gameMin,
       onEdit: (pid, eidx, kind, action, payload) => {
