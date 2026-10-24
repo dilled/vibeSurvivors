@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, protocol, serverbase]
 created: "2026-10-18T05:02:17"
-updated: "2026-10-18T08:32:00"
+updated: "2026-10-24T16:59:43"
 ---
 
 <!-- compiled_truth -->
@@ -75,4 +75,9 @@ M28 shipped: presence rendering (remote avatars + name tags from `remotes`) ‒ 
   kind: decision
   summary: "Correction: attachMultiplayer M30 options are the animals getter + onAnimals callback"
   source: "brain sync pass: commit 3fdb625 (M30)"
+  affects: [vivsurvivors-mp-relay]
+
+- time: 2026-10-24T16:59:43
+  kind: reversal
+  summary: "Pivot: user directed the server is master of everything (animals, players, trees locations/rotations). The v2 first-client-authority relay model is superseded by the v3 server-authoritative model (previously 'future, NOT now'); see [[v3-server-authoritative]]. Relay-era protocol facts remain valid wire history."
   affects: [vivsurvivors-mp-relay]

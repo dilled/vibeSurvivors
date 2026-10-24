@@ -107,7 +107,7 @@ Follow the established pattern exactly (see `ServerBase/ReadMe.md`, `VibeCraftPl
 - **Client hook:** `?mp=host:port` URL param exactly like vibeCraft; without it, pure single-player (server optional).
 - **Session identity:** per-tab session, first-run name + avatar prompt stored in localStorage (house pattern).
 - **Deliberately NOT in v1-mp:** inventory sync, death/respawn rules, shared journal, host-migration. Those come in mp v2+ if v1 lands.
-- **Future (mp v2+), NOT now:** move to the **vibeGTA v3 model — server is world-authority**: the plugin owns world gen, animal sim, and world edits (applies them itself, rollbacks on rejection), clients upload their own-body state @30 Hz and the server plausibility-checks + stamps grants. Hard-version the protocol at the switch. v1-mp stays on the v2 relay model above.
+- **Server world-authority (v3 model) ‒ IN PROGRESS (M32+):** the server is **master of everything**: it owns island gen (tree/vegetation/rock locations and rotations are generated and shipped by the server, not derived locally), the animal simulation, and player state. Clients render what the server says. The v2 first-client-authority relay model (above) is superseded as each milestone lands; the protocol is hard-versioned at the switch (see [[v3-server-authoritative]] brain page).
 
 ### Sequencing decision
 Ship **single-player first** (it must be fun with zero multiplayer), then the plugin. The deterministic-seed requirement in §3 is the *only* thing v1 must design for mp upfront.
@@ -154,6 +154,10 @@ Ship **single-player first** (it must be fun with zero multiplayer), then the pl
 | **M29** ✅ | Shared deterministic world state | 3 tabs converge on the same island/world state |
 | **M30** ✅ | Multiplayer animals + gameplay event relay | Animal/gameplay events converge across clients |
 | **M31** ✅ | Multiplayer integration + reconnect/testing | 3 tabs survive normal play/reconnect without world divergence |
+| **M32** | Server island master: plugin generates the island from the seed (C++ port of mulberry32/fbm/scatter + plant spawning), ships tree/plant/rock placements (positions + rotations) to each client; mp clients render vegetation from the server list | 3 tabs see identical trees/rotations from server data; server list matches the client's deterministic generation |
+| **M33** | Server animal sim: animal FSM + alarm bus ported to the plugin; the server simulates the roster and streams it; mp clients stop running the local animal sim | 3-tab animals driven purely by the server; single-player local sim untouched |
+| **M34** | Server player authority: server is the single source of truth for player transforms (30 Hz upload, plausibility checks + stamping/rollback); authority-election logic retired | 3-tab player positions determined by the server; no client-authority fallback |
+| **M35** | v2 relay removal + v3 integration: client authority election/uploads (time/animals/edits) removed, reconnect/no-divergence re-verified under v3 | M31-equivalent smoke/E2E suite green with zero client authority |
 
 ## 12. Dev conventions
 
