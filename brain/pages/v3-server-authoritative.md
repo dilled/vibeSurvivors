@@ -5,25 +5,25 @@ category: decision
 status: active
 tags: [multiplayer, serverbase, authority]
 created: "2026-10-24T16:59:28"
-updated: "2026-10-24T14:42:17"
+updated: "2026-10-24T16:14:57"
 ---
 
 <!-- compiled_truth -->
 ## The decision (v3: server is world-authority)
 
-2026-10-24 the user directed a pivot: in multiplayer the server is **master of everything**. It owns island generation (tree/vegetation/rock locations **and rotations** are generated on the server and shipped to clients, not derived locally), the animal simulation, and player state. Clients render what the server says. The v2 first-client-authority relay model ([[vivsurvivors-mp-relay]]) is superseded as each milestone lands and removed entirely at M40. The protocol is hard-versioned at the switch (v2 bump at M33); relay-era wire facts remain valid protocol history.
+2026-10-24 the user directed a pivot: in multiplayer the server is **master of everything**. It owns island generation (tree/vegetation/rock locations **and rotations** are generated on the server and shipped to clients, not derived locally), the animal simulation, and player state. Clients render what the server says. The v2 first-client-authority relay model ([[vivsurvivors-mp-relay]]) is superseded as each milestone lands and removed entirely at M40. The protocol is hard-versioned at the switch (**v2 bump landed in M33: the server now refuses non-v2 joins**); relay-era wire facts remain valid protocol history.
 
 ## Milestone plan (per PLAN.md)
 
-- **M32** ‒ Bit-exact C++ port of the deterministic stack (mulberry32, hash2, vnoise, fbm, heightAt, scatter) with golden test vectors extracted from the JS implementation; C++ output must bit-match the JS vectors.
-- **M33** ‒ Server island generation in C++ (vegetation/plant/rock positions + rotations from the same seed); protocol **v2** join payload ships the placement block on join; the server keeps a world store for later validation.
-- **M34** ‒ Client builds the `?mp=` world from the server payload (local scatter/plant spawn skipped in mp mode); without `?mp=` nothing changes ‒ single-player stays bit-identical.
+- **M32** ✅ ‒ Bit-exact C++ port of the deterministic stack (mulberry32, hash2, vnoise, fbm, heightAt, scatter) with golden test vectors extracted from the JS implementation; C++ output must bit-match the JS vectors.
+- **M33** ✅ ‒ Server island generation in C++: `VibeSurvivorsPlugin/src/WorldGen.cpp` `genIsland(seed)` mirrors the client's draw order 1:1 (global stream: palms scatter + 3 draws/palm, trees scatter + 1/tree, rocks 90+25, then the render-block visual draws in the real order; plants on per-species private streams `mulberry32(seed+offset)`, PLANT_TYPES key order). Protocol **v2** hard bump: join = `playerId|2|seed`, server refuses any other version before the seed check. Type 33 `MSG_VIVS_WORLD` placement block ([u32 seed][palms 6f64][trees 11f64][rocks 5f64][species: key + pts 3f64], all LE) is sent on every (re)join, ahead of the M29 edit-history catch-up (per-player FIFO, one packet per tick). Server keeps the world in memory (`VivsModule::world_`) for M39 edit validation. Verified: ctest `vibs_world_matches_js_reference` (byte-identity against the JS reference extracted verbatim from index.html), 134/134 green; headless E2E `smoke/e2e-world.mjs` (3 clients byte-identical, v1 refused, rejoin re-sync).
+- **M34** ‒ Client builds the `?mp=` world from the server payload (local scatter/plant spawn skipped in mp mode); without `?mp=` nothing changes ‒ single-player stays bit-identical. `lib/mp.js` already parses type 33 (M33) into `mpApi.world` via `onWorld`.
 - **M35** ‒ Server animal sim part 1: C++ animal framework (registry, FSM helpers, phase slots) + first species batch (fish, crabs, tigers, gulls) simulated on the server and streamed to clients.
 - **M40** ‒ Protocol v2 hardening + full v2 relay removal (client authority uploads of animals/time, authority election, edit relay gates) + server-restart resilience (world store survives restart).
 
 The single-player determinism contract (island = f(SEED 1337, gameMin, edits); bit-identical without `?mp=`) is preserved throughout the v3 transition. MP follow-on requirements M42-M44 (remote camp/structure/fire + held-item visibility, remote-player animation, vegetation placement ground-clamp/canopy-alignment fix keeping placement deterministic) build on the v3 world.
 
-Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-mp-world-state]], [[m30-mp-animals]], [[multiplayer-deferred-serverbase]].
+Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-mp-world-state]], [[m30-mp-animals]], [[m32-cpp-determinism-port]], [[multiplayer-deferred-serverbase]].
 
 
 ## Timeline
@@ -38,4 +38,10 @@ Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-m
   kind: decision
   summary: "Filled the placeholder page with the v3 pivot decision + M32-M35/M40 milestone plan"
   source: "brain sync pass: commits 837f413, 285f23b, 9f2f3d8 (PLAN.md M32-M35, M42-M44)"
+  affects: [v3-server-authoritative]
+
+- time: 2026-10-24T16:14:57
+  kind: decision
+  summary: "M33 landed: C++ genIsland (WorldGen.cpp) byte-identical to the JS reference, protocol v2 hard bump (server refuses non-v2 joins), type-33 world block on (re)join, in-memory world store for M39; ctest byte-identity + headless E2E green"
+  source: "M33 implementation session: commits in ServerBase + vibeSurvivors"
   affects: [v3-server-authoritative]

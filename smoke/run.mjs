@@ -3270,7 +3270,7 @@ patched += `
     if (intervals.length !== 1 || intervals[0].ms !== (1000 / 30))
       throw new Error('M27: the 30 Hz state send loop is missing');
 
-    /* 3. join: type 3 "<uuid>|1|1337" (mp.js assigns ws.onopen — invoke it as OPEN) */
+    /* 3. join: type 3 "<uuid>|2|1337" (mp.js assigns ws.onopen — invoke it as OPEN) */
     wsInstances[0].readyState = 1;
     wsInstances[0].onopen();
     let j = wsInstances[0].sent.at(-1);
@@ -3278,8 +3278,8 @@ patched += `
     if (j[0] !== 3) throw new Error('M27: join is not type 3');
     const joinText = new TextDecoder().decode(j.subarray(1));
     const jParts = joinText.split('|');
-    if (jParts.length !== 3 || jParts[1] !== '1' || jParts[2] !== '1337')
-      throw new Error('M27: join payload is not "<id>|1|1337": ' + joinText);
+    if (jParts.length !== 3 || jParts[1] !== '2' || jParts[2] !== '1337')
+      throw new Error('M27: join payload is not "<id>|2|1337": ' + joinText);
 
     /* 4. join success: publicId is BIG-endian, the name is sent right after */
     const jsBuf = new Uint8Array(5);
@@ -4389,6 +4389,99 @@ patched += `
     started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
     stats.health = saveStats.health; stats.hunger = saveStats.hunger;
     stats.thirst = saveStats.thirst; stats.wet = saveStats.wet;
+  }
+}
+
+/* ---- M33: protocol v2 join + island placement block (type 33) ---- */
+{
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const worldLog = [];
+    const api = mp.attachMultiplayer({
+      rig: { position: { x: 0, y: 0, z: 0 }, rotation: { y: 0 } },
+      url: '127.0.0.1:3003', seed: 1337, displayName: 'WorldSmoke',
+      inWater: () => false, onWorld: (w) => worldLog.push(w),
+    });
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    let j = wsInstances[0].sent.at(-1);
+    j = j instanceof Uint8Array ? j : new Uint8Array(j);
+    const jp = new TextDecoder().decode(j.subarray(1)).split('|');
+    if (jp.length !== 3 || jp[1] !== '2')
+      throw new Error('M33: join payload is not protocol v2: ' + jp.join('|'));
+
+    /* join success: publicId 21 (big-endian, the M27 pattern) */
+    const jsBuf = new Uint8Array(5);
+    jsBuf[0] = 8; jsBuf[4] = 21;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 21) throw new Error('M33: join success not parsed');
+
+    /* type 33: seed 1337, 1 palm, 1 tree, 1 rock, 2 species */
+    const u32 = v => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; };
+    const u16 = v => { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v, true); return b; };
+    const f64 = v => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, v, true); return b; };
+    const enc = s => new TextEncoder().encode(s);
+    const sendWorld = (chunks) => {
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const buf = new Uint8Array(total);
+      let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
+      wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
+    };
+    sendWorld([
+      new Uint8Array([33]),
+      u32(1337),
+      u32(1), f64(1.25), f64(-2.5), f64(4.5), f64(4.1), f64(0.1), f64(-0.05),
+      u32(1), f64(7.5), f64(8.25), f64(12.75), f64(7.5), f64(3.1),
+      f64(0.6), f64(0.7), f64(0.8), f64(2.5), f64(3.5), f64(4.5),
+      u32(1), f64(15.5), f64(-16.25), f64(14.125), f64(1.25), f64(1.4),
+      u16(2),
+      u16(5), enc('fiber'), u32(2), f64(10), f64(11), f64(2.5), f64(12), f64(13), f64(3.5),
+      u16(4), enc('herb'), u32(1), f64(20), f64(21), f64(6.5),
+    ]);
+    if (worldLog.length !== 1) throw new Error('M33: onWorld did not fire once');
+    const w = worldLog[0];
+    if (w.seed !== 1337) throw new Error('M33: seed wrong: ' + w.seed);
+    if (w.palms.length !== 1 || w.palms[0].x !== 1.25 || w.palms[0].groundH !== 4.5
+        || w.palms[0].trunkH !== 4.1 || w.palms[0].tx !== 0.1 || w.palms[0].tz !== -0.05)
+      throw new Error('M33: palm parse wrong: ' + JSON.stringify(w.palms));
+    if (w.trees.length !== 1 || w.trees[0].trunkH !== 7.5 || w.trees[0].canopyS !== 3.1
+        || w.trees[0].off[1] !== 0.7 || w.trees[0].len[2] !== 4.5)
+      throw new Error('M33: tree parse wrong: ' + JSON.stringify(w.trees));
+    if (w.rocks.length !== 1 || w.rocks[0].groundH !== 14.125
+        || w.rocks[0].s !== 1.25 || w.rocks[0].sy !== 1.4)
+      throw new Error('M33: rock parse wrong: ' + JSON.stringify(w.rocks));
+    if (w.species.length !== 2 || w.species[0].key !== 'fiber' || w.species[0].pts.length !== 2
+        || w.species[0].pts[0].z !== 11 || w.species[0].pts[1].h !== 3.5
+        || w.species[1].key !== 'herb' || w.species[1].pts[0].x !== 20)
+      throw new Error('M33: species parse wrong: ' + JSON.stringify(w.species));
+    if (api.world !== w) throw new Error('M33: api.world is not the last world');
+
+    /* rejoin: the server re-sends the block; the stored world is replaced */
+    sendWorld([new Uint8Array([33]), u32(1337), u32(0), u32(0), u32(0), u16(0)]);
+    if (worldLog.length !== 2)
+      throw new Error('M33: the second world did not fire onWorld');
+    if (api.world !== worldLog[1] || api.world.palms.length !== 0 || api.world.species.length !== 0)
+      throw new Error('M33: api.world was not replaced by the second world');
+
+    api.close();
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
   }
 }
 `;
