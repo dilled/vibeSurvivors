@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, serverbase, authority]
 created: "2026-10-24T16:59:28"
-updated: "2026-10-24T21:07:58"
+updated: "2026-10-25T09:58:24"
 ---
 
 <!-- compiled_truth -->
@@ -71,3 +71,9 @@ Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-m
   summary: "M36 landed: AnimalSim simulates all 51 animals (six new bands + M13 entities stored + pelican/shark/spider appended after M14 crabs), M16 alarm bus ported with receivers for every species and the monkey shriek as the only organic emitter (player-dependent emitters deferred to M37/M38); mp clients fully disable the local animal sim (updateAnimals gated on mpApi.connected(), mpAnimalsFrame y-lerp + fish n from state byte, new mpAnimalsPresent puppet pass with schoolPlace factored out); 152/152 ServerBase ctest incl. 51-animal byte-identity, smoke M36 block, 3-tab 51-slot E2E, world payload unchanged"
   source: "M36 implementation session: commits in ServerBase + vibeSurvivors"
   affects: [v3-server-authoritative]
+
+- time: 2026-10-25T09:58:24
+  kind: decision
+  summary: "M38 landed: server player authority on the client - every tab (incl. the mover's own) reconciles its rig to the server's stamped transform with the exact M28 lerp semantics; self capture in lib/mp.js + mpSelfFrame in index.html; zero wire change (protocol v2, 21 B state); M29/M30 gates + authorityPublicId stay until M39/M40; detail in [[m38-server-player-authority]]"
+  source: "brain sync pass: commit 9dbb259 (range 67e2d35..9dbb259)"
+  affects: [v3-server-authoritative, m38-server-player-authority]
