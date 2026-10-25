@@ -5582,6 +5582,167 @@ patched += `
     mpAvatars.clear();
   }
 }
+
+/* ---- M42: MP shared-world visibility (fire edits + held spear flag) ---- */
+{
+  /* 1. single-player invariants: the held bit constant + no leaked mpApi */
+  if (mpApi !== null) throw new Error('M42: mpApi leaked in from the M40 block');
+  if (MP_HELD_SPEAR !== 2) throw new Error('M42: MP_HELD_SPEAR must be the state byte bit1');
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  const saveFires = fires.length;
+  while (fires.length > 1) { const f = fires.pop(); scene.remove(f.grp); }   /* the block adds 4 fires (cap 5) */
+
+  let api = null;
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    if (mp.STATE_HELD_SPEAR !== MP_HELD_SPEAR)
+      throw new Error('M42: mp.js STATE_HELD_SPEAR must match the page constant');
+
+    /* 2. the held option lands in the type-26 state byte (bit1), 21 B frame */
+    let heldFlag = 0;
+    api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M42Tester',
+      inWater: () => false, held: () => heldFlag,
+    });
+    mpApi = api;
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 120, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 120 || api.connected() !== true)
+      throw new Error('M42: the join success was not parsed');
+
+    const lastState = () => {
+      const d = wsInstances[0].sent.at(-1);
+      return d instanceof Uint8Array ? d : new Uint8Array(d);
+    };
+    intervals[0].fn();
+    let st = lastState();
+    if (st[0] !== 26 || st.byteLength !== 22) throw new Error('M42: the state frame is not [26][21B]');
+    if (st[21] !== 0) throw new Error('M42: no spear -> the state byte must be 0 (got ' + st[21] + ')');
+
+    heldFlag = mp.STATE_HELD_SPEAR;
+    intervals[0].fn();
+    st = lastState();
+    if (st[21] !== 2) throw new Error('M42: the spear flag must set state byte bit1 (got ' + st[21] + ')');
+
+    /* 3. tick parse: p.held is exposed; the self capture keeps its shape */
+    const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
+    const playersTick = (players) => {
+      const parts = [new Uint8Array([27, 1]), w32(1), w32(players.length)];
+      for (const p of players) {
+        const b = new DataView(new ArrayBuffer(21));
+        b.setUint32(0, p.id, true);
+        b.setFloat32(4, p.x, true); b.setFloat32(8, p.y, true);
+        b.setFloat32(12, p.z, true); b.setFloat32(16, p.yaw, true);
+        b.setUint8(20, p.state);
+        parts.push(new Uint8Array(b.buffer));
+      }
+      const n = parts.reduce((a, b) => a + b.length, 0);
+      const out = new Uint8Array(n); let o = 0;
+      for (const p of parts) { out.set(p, o); o += p.length; }
+      wsInstances[0].onmessage({ data: out.buffer.slice(0) });
+    };
+    playersTick([
+      { id: 55, x: 1.0, y: 2.0, z: -3.0, yaw: 0.5, state: 2 },   // remote with spear
+      { id: 56, x: 2.0, y: 2.0, z: -4.0, yaw: 0.5, state: 0 },   // remote without
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 3 },  // self: underwater + spear
+    ]);
+    const r55 = api.remotes.get(55), r56 = api.remotes.get(56);
+    if (!r55 || r55.held !== 2) throw new Error('M42: the remote held bit was not parsed: ' + (r55 && r55.held));
+    if (r55.underwater !== false) throw new Error('M42: the remote underwater bit must stay false');
+    if (!r56 || r56.held !== 0) throw new Error('M42: a remote without the bit must parse held 0');
+    if (api.self && api.self.underwater !== true) throw new Error('M42: the self stamp was not captured');
+    if ('held' in api.self) throw new Error('M42: the self capture must not adopt the held bit (SP spear is local)');
+
+    /* 4. kind-8 fire edits: apply, deterministic phase, idempotent dedup */
+    let fx = 0, fz = 0, found = false;
+    for (let r = 3; r < 120 && !found; r += 3)
+      for (let a = 0; a < Math.PI * 2; a += 0.5) {
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        if (heightAt(x, z) >= 0.35) { fx = x; fz = z; found = true; break; }
+      }
+    if (!found) throw new Error('M42: no dry spot found for the fire test');
+    const nf0 = fires.length;
+    mpApplyWorldEdit(8, 0, mpPayloadFire(fx, fz));
+    if (fires.length !== nf0 + 1) throw new Error('M42: the relayed fire edit was not applied');
+    const ap = fires[fires.length - 1];
+    if (Math.abs(ap.x - fx) > 1e-3 || Math.abs(ap.z - fz) > 1e-3)
+      throw new Error('M42: the relayed fire is not at the edit position');
+    const wantPhase = (((fx * 12.9898 + fz * 78.233) % 10) + 10) % 10;
+    if (Math.abs(ap.phase - wantPhase) > 1e-9)
+      throw new Error('M42: the mp fire phase must be deterministic (got ' + ap.phase + ')');
+    mpApplyWorldEdit(8, 0, mpPayloadFire(fx, fz));
+    if (fires.length !== nf0 + 1) throw new Error('M42: a duplicate kind-8 edit (same x,z) must be a no-op');
+    mpApplyWorldEdit(8, 0, mpPayloadFire(fx + 0.5, fz));
+    if (fires.length !== nf0 + 2) throw new Error('M42: a nearby but distinct fire must be applied');
+    const badFire = new Uint8Array(12);
+    new DataView(badFire.buffer).setFloat32(0, NaN, true);
+    mpApplyWorldEdit(8, 0, badFire);
+    if (fires.length !== nf0 + 2) throw new Error('M42: a non-finite fire edit must be ignored');
+
+    /* 5. remote avatars: the spear group follows the held bit */
+    mpRemotesFrame(0.016);
+    const av55 = mpAvatars.get(55), av56 = mpAvatars.get(56);
+    if (!av55 || !av55.spear) throw new Error('M42: the avatar must carry a spear group');
+    if (!av55.spear.visible) throw new Error('M42: held bit1 must show the spear on the remote avatar');
+    if (!av56 || av56.spear.visible) throw new Error('M42: no held bit -> no spear on the remote avatar');
+    playersTick([
+      { id: 55, x: 1.0, y: 2.0, z: -3.0, yaw: 0.5, state: 0 },   // spear dropped off-wire
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 3 },
+    ]);
+    mpRemotesFrame(0.016);
+    if (av55.spear.visible) throw new Error('M42: the spear must hide when the held bit clears');
+
+    /* 6. actFire emits the kind-8 edit when connected ... */
+    const nf1 = fires.length;
+    rig.position.set(fx, heightAt(fx, fz), fz);
+    const sentBefore = wsInstances[0].sent.length;
+    actFire();
+    if (wsInstances[0].sent.length !== sentBefore + 1) throw new Error('M42: actFire must emit one edit frame');
+    let ed = lastState();
+    if (ed[0] !== 28 || ed.byteLength !== 24) throw new Error('M42: the fire edit frame is not [28][23B]');
+    if (ed[9] !== 8) throw new Error('M42: the fire edit must be kind 8 (got ' + ed[9] + ')');
+    const edDv = new DataView(ed.buffer, ed.byteOffset, ed.byteLength);
+    if (Math.abs(edDv.getFloat32(11, true) - fx) > 1e-3 || Math.abs(edDv.getFloat32(15, true) - fz) > 1e-3)
+      throw new Error('M42: the fire edit payload must carry f32 x, f32 z');
+    if (fires.length !== nf1 + 1) throw new Error('M42: the local fire was not lit');
+
+    /* ... and is silent when single-player (mpApi null, fires stay local) */
+    mpApi = null;
+    const nf2 = fires.length, sent2 = wsInstances[0].sent.length;
+    actFire();
+    if (fires.length !== nf2 + 1) throw new Error('M42: the SP fire was not lit');
+    if (wsInstances[0].sent.length !== sent2) throw new Error('M42: the SP actFire must not emit');
+    mpApi = api;
+  } finally {
+    if (api) api.close();
+    mpApi = null;
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    while (fires.length > saveFires) { const f = fires.pop(); scene.remove(f.grp); }
+    for (const av of mpAvatars.values()) scene.remove(av.grp);
+    mpAvatars.clear();
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);

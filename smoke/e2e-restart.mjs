@@ -122,6 +122,12 @@ const campPayload = () => {
   p.set(f32(CAMP.rot), 8);
   return p;
 };
+const firePayload = (x, z) => {   // M42: kind-8 fire payload (f32 x, f32 z)
+  const p = new Uint8Array(12);
+  p.set(f32(x), 0);
+  p.set(f32(z), 4);
+  return p;
+};
 function editBody(publicId, kind, entityIndex, payload = []) {
   const b = new Uint8Array(EDIT_BYTES);
   const dv = new DataView(b.buffer);
@@ -322,13 +328,17 @@ async function main() {
     A.sendEdit(0, 0, [1]);
     await A.waitFor(() => A.recentEdits(6).some((e) => bufEq(e, palmBody)),
       'palm shake relay');
+    const fireBody = editBody(A.publicId, 8, 0, firePayload(CAMP.x, CAMP.z));
+    A.sendEdit(8, 0, firePayload(CAMP.x, CAMP.z));
+    await A.waitFor(() => A.recentEdits(6).some((e) => bufEq(e, fireBody)),
+      'fire relay (kind 8, M42)');
     await A.waitFor(() => A.ticks.filter((tk) => tk.time !== null).length >= 3,
       'clocked ticks');
     const times = A.ticks.map((tk) => tk.time).filter((t) => t !== null);
     const lastBefore = times[times.length - 1];
     if (!(lastBefore > 0))
       throw new Error('the server clock was not observed: ' + lastBefore);
-    console.log(`run 1: camp + palm shake relayed; server clock at ${lastBefore.toFixed(3)}`);
+    console.log(`run 1: camp + palm shake + fire (M42) relayed; server clock at ${lastBefore.toFixed(3)}`);
     A.close();
 
     /* ---- (b) shutdown: the world store lands in the relay CWD ---- */
@@ -337,10 +347,10 @@ async function main() {
     if (!existsSync(storePath))
       throw new Error('vibsurvivors-worldstore.bin was not written on shutdown');
     const storeBytes = statSync(storePath).size;
-    /* header 20B + 31B per edit: camp + palm = 82B expected */
-    if (storeBytes !== 20 + 2 * 31)
-      throw new Error('world store size is ' + storeBytes + ', expected ' + (20 + 2 * 31));
-    console.log(`shutdown: world store persisted (${storeBytes} bytes, 2 edits + clock + seed)`);
+    /* header 20B + 31B per edit: camp + palm + fire = 113B expected */
+    if (storeBytes !== 20 + 3 * 31)
+      throw new Error('world store size is ' + storeBytes + ', expected ' + (20 + 3 * 31));
+    console.log(`shutdown: world store persisted (${storeBytes} bytes, 3 edits + clock + seed)`);
 
     /* ---- (c) restart in the SAME CWD: history replays, clock resumes ---- */
     const r2 = new Relay(dir);
@@ -353,13 +363,15 @@ async function main() {
     if (B.joinError) throw new Error(`B join error: ${B.joinError}`);
     await B.waitFor(() => B.world !== null, 'world block');
     await B.waitFor(() => B.editSync !== null, 'EDIT_SYNC catch-up');
-    if (B.editSync.length !== 2)
-      throw new Error(`B's edit sync has ${B.editSync.length} edits, expected 2`);
+    if (B.editSync.length !== 3)
+      throw new Error(`B's edit sync has ${B.editSync.length} edits, expected 3`);
     if (!bufEq(B.editSync[0], campBody))
       throw new Error('edit sync[0] is not the pre-restart camp edit');
     if (!bufEq(B.editSync[1], palmBody))
       throw new Error('edit sync[1] is not the pre-restart palm shake');
-    console.log('restart: the 2 pre-restart edits replayed byte-identically (type-30)');
+    if (!bufEq(B.editSync[2], fireBody))
+      throw new Error('edit sync[2] is not the pre-restart fire edit (M42 kind 8)');
+    console.log('restart: the 3 pre-restart edits (incl. M42 fire) replayed byte-identically (type-30)');
 
     /* the server clock resumes from the persisted value - not a fresh start */
     await B.waitFor(() => B.ticks.filter((tk) => tk.time !== null).length >= 5,
@@ -376,7 +388,7 @@ async function main() {
         `persisted value (pre-restart ${lastBefore.toFixed(3)})`);
     console.log(`restart: clock resumed at ${lastAfter.toFixed(3)} (pre-restart ${lastBefore.toFixed(3)}) - no divergence`);
 
-    console.log('E2E_OK - M40: world store survives a server restart; edit history replays byte-identically; the clock resumes, not resets');
+    console.log('E2E_OK - M40: world store survives a server restart; edit history (incl. M42 fires) replays byte-identically; the clock resumes, not resets');
   } finally {
     for (const r of relays) r.stop();
     for (const c of clients) c.close();

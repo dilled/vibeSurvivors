@@ -895,7 +895,7 @@ const itemMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2e });
 /* ---- fires: light at night, heat for cooking ---- */
 const fires = [];
 const fireLogMat = new THREE.MeshLambertMaterial({ color: 0x5a4630 });
-function makeFire(x, g, z) {
+function makeFire(x, g, z, phase = Math.random() * 10) {   /* M42: phase optional (mp apply is zero-rng) */
   const grp = new THREE.Group();
   grp.position.set(x, g, z);
   const logGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.8, 5);
@@ -920,7 +920,7 @@ function makeFire(x, g, z) {
   light.position.set(0, 0.8, 0);
   grp.add(light);
   scene.add(grp);
-  const f = { x, z, g, grp, flames, light, cooking: null, phase: Math.random() * 10 };
+  const f = { x, z, g, grp, flames, light, cooking: null, phase };   /* M42: caller-provided on the mp apply path */
   fires.push(f);
   return f;
 }
@@ -2821,8 +2821,9 @@ function journalTick(dt) {
   }
 }
 
-/* ---- the spear (attached to the right arm) ---- */
-const spearMesh = (() => {
+/* ---- the spear (attached to the right arm; M42: makeSpearGroup also
+ * builds the spear rendered on REMOTE avatars) ---- */
+function makeSpearGroup() {
   const g = new THREE.Group();
   const shaftMat = new THREE.MeshLambertMaterial({ color: 0x7a5b3a });
   const tipMat = new THREE.MeshLambertMaterial({ color: 0xb8b2a4 });
@@ -2834,6 +2835,10 @@ const spearMesh = (() => {
   tip.rotation.x = Math.PI / 2;
   tip.position.z = 1.2;
   g.add(tip);
+  return g;
+}
+const spearMesh = (() => {
+  const g = makeSpearGroup();
   g.position.set(0.02, -0.3, 0.25);
   g.rotation.x = -0.35;
   g.visible = false;
@@ -3231,6 +3236,7 @@ function actFire() {
   const { x, z, h } = playerPos();
   if (h < 0.35) { toast('the water would put it out'); return; }
   makeFire(x, h, z);
+  mpEmit(8, 0, mpPayloadFire(x, z));   /* M42: relay the fire as a shared-world edit */
   cue('fire');   /* M23 */
   logLine('you light a fire', 'survival');
   toast('\u{1F525} a fire \u2014 light, and something to cook over');
@@ -4608,6 +4614,13 @@ function makeMpAvatar(id) {
   const armL = new THREE.Mesh(armGeo, shirt); armL.position.set(-0.38, 1.32, 0);
   const armR = new THREE.Mesh(armGeo, shirt); armR.position.set(0.38, 1.32, 0);
   grp.add(torso, head, legL, legR, armL, armR);
+  /* M42: held spear on the right arm (same look as the local spearMesh;
+   * visibility follows the state byte's held bit every tick) */
+  const spearG = makeSpearGroup();
+  spearG.position.set(0.02, -0.3, 0.25);
+  spearG.rotation.x = -0.35;
+  spearG.visible = false;
+  armR.add(spearG);
   const canvas = document.createElement('canvas');
   canvas.width = 256; canvas.height = 48;
   const tex = new THREE.CanvasTexture(canvas);
@@ -4616,7 +4629,7 @@ function makeMpAvatar(id) {
   sprite.scale.set(1.8, 0.32, 1);
   sprite.visible = false;                       /* shown once a name arrives */
   grp.add(sprite);
-  return { grp, sprite, canvas, tex, name: null, x: 0, y: 0, z: 0, yaw: 0 };
+  return { grp, sprite, canvas, tex, name: null, x: 0, y: 0, z: 0, yaw: 0, spear: spearG };
 }
 function drawMpNameTag(av, text) {
   av.name = text;
@@ -4664,6 +4677,7 @@ function mpRemotesFrame(dt) {
     av.grp.rotation.y = av.yaw;
     if (p.name && p.name !== av.name) drawMpNameTag(av, p.name);   /* names arrive after players */
     av.sprite.visible = !!p.name;
+    av.spear.visible = !!(p.held & MP_HELD_SPEAR);   /* M42: held spear on remote avatars */
   }
 }
 
@@ -4727,14 +4741,24 @@ const mpPayloadCamp = (x, z, rot) => {
   new DataView(b.buffer).setFloat32(8, rot, true);
   return b;
 };
-/* Edit kinds (v1): 0=palm (payload[0]=u8 cocos set), 1=plant (payload[0]=u8
- * chargesLeft set), 2=camp (payload = f32 x, f32 z, f32 rot LE), 3=shelter
- * 4=bed 5=fence 6=torch 7=raft (payload unused; positions = camp +
- * campOffsets(type), mesh built only if the slot is empty). Set semantics:
- * replaying the same edit is a no-op, so the EDIT_SYNC catch-up is safe.
+const mpPayloadFire = (x, z) => {   /* M42: kind-8 fire payload (f32 x, f32 z) */
+  const b = new Uint8Array(12);
+  new DataView(b.buffer).setFloat32(0, x, true);
+  new DataView(b.buffer).setFloat32(4, z, true);
+  return b;
+};
+/* Edit kinds (v1 + M42): 0=palm (payload[0]=u8 cocos set), 1=plant
+ * (payload[0]=u8 chargesLeft set), 2=camp (payload = f32 x, f32 z, f32 rot
+ * LE), 3=shelter 4=bed 5=fence 6=torch 7=raft (payload unused; positions =
+ * camp + campOffsets(type), mesh built only if the slot is empty),
+ * 8=fire (M42: payload = f32 x, f32 z; the G-key fire is a shared-world
+ * edit - deduped by position so the EDIT_SYNC catch-up is a no-op). Set
+ * semantics: replaying the same edit is a no-op, so the EDIT_SYNC catch-up
+ * is safe.
  */
+const MP_HELD_SPEAR = 1 << 1;   /* M42: held-item bit of the state byte (lib/mp.js STATE_HELD_SPEAR) */
 function mpApplyWorldEdit(kind, entityIndex, payload) {
-  if (!payload || kind > 7) return;
+  if (!payload || kind > 8) return;
   if (kind === 0) {              /* palm: hide the dropped crowns (no falling items on replay) */
     const p = palms[entityIndex];
     if (!p || !cocosMesh) return;  /* M34: mp crowns unallocated until the world payload */
@@ -4763,6 +4787,17 @@ function mpApplyWorldEdit(kind, entityIndex, payload) {
     if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(rot)) return;
     makeCamp(x, z);
     camp.rot = rot;
+    return;
+  }
+  if (kind === 8) {           /* M42: fire (payload = f32 x, f32 z) - BEFORE the structure mapping */
+    const dv = new DataView(payload.buffer, payload.byteOffset, 12);
+    const x = dv.getFloat32(0, true), z = dv.getFloat32(4, true);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    const has = fires.some((f) => Math.abs(f.x - x) < 1e-3 && Math.abs(f.z - z) < 1e-3);
+    if (has) return;          /* set semantics: a duplicate (re)edit is a no-op */
+    /* zero-rng flicker phase derived from the position (the mp apply path must not use Math.random) */
+    const phase = (((x * 12.9898 + z * 78.233) % 10) + 10) % 10;
+    makeFire(x, heightAt(x, z), z, phase);
     return;
   }
   const type = kind === 3 ? 'shelter' : kind === 4 ? 'bed' : kind === 5 ? 'fence'
@@ -5017,6 +5052,7 @@ function mpBuildWorld(w, force) {
       rig, url: mpUrl, seed: SEED,
       displayName: await askMpName(),
       inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
+      held: () => (spear ? MP_HELD_SPEAR : 0),   /* M42: state byte bit1 (has spear, not swinging) */
       /* M34: build the vegetation world from the server's placement block */
       onWorld: (w) => mpBuildWorld(w),
       /* M29: shared deterministic world state (M40: state uplink only -

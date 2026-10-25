@@ -11,7 +11,11 @@
 //       stamps stay within the 12 m/s budget; the last accepted state keeps
 //       being relayed (server-side rollback);
 //   (d) regression: the time+weather tail of the tick is still
-//       byte-identical across tabs (M37 expectation).
+//       byte-identical across tabs (M37 expectation);
+//   (e) M42: the state byte's held-item bits ride the stamped state - tab A
+//       sets bit1 (spear in hand) and every tab sees A's 21 B stamp with the
+//       bit, byte-identically, while B/C stamps stay bit-identical (bit0
+//       underwater and the rest of the frame untouched).
 // Data-level convergence, the M27-M37 precedent (no chrome).
 //
 // Usage:
@@ -60,10 +64,32 @@ function parsePlayers(buf) {
       y: dv.getFloat32(off + 8, true),
       z: dv.getFloat32(off + 12, true),
       yaw: dv.getFloat32(off + 16, true),
+      state: dv.getUint8(off + 20),   // M42: bit0 underwater, bit1 held spear
     });
     off += STATE_BYTES;
   }
   return out;
+}
+
+/* The raw 21 B VivsPlayerState entry of one id in a tick (M42 byte compare). */
+function stateEntry(buf, id) {
+  const flags = buf[1];
+  if (!(flags & TICK_PLAYERS)) return null;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let off = 2;
+  if (off + 8 > buf.length) return null;
+  const count = dv.getUint32(off + 4, true);
+  off += 8;
+  for (let i = 0; i < count && off + STATE_BYTES <= buf.length; i++) {
+    if (dv.getUint32(off, true) === id) return buf.slice(off, off + STATE_BYTES);
+    off += STATE_BYTES;
+  }
+  return null;
+}
+function bufEq(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /* Walk the fixed section order (players, edits, animals, names) to the tail,
@@ -113,6 +139,7 @@ class Client {
     this.ticks = [];   // {buf, players: Map, tail, t} for bit0 ticks, in order
     this.x = x0; this.z = z0; this.vx = vx; this.vz = vz; this.yaw = 0;
     this.uploader = null;
+    this.stateByte = 0;   // M42: the uploaded state byte (bit1 = held spear)
   }
   connect() {
     return new Promise((resolve, reject) => {
@@ -146,16 +173,19 @@ class Client {
       };
     });
   }
-  /* 30 Hz type-26 upload [u32 publicId (server overwrites)][f32 x,y,z,yaw][u8 0] */
+  /* 30 Hz type-26 upload [u32 publicId (server overwrites)][f32 x,y,z,yaw]
+   *    [u8 state] (M42: stateByte = bit0 underwater | bit1 held spear) */
   buildState(x, y, z, yaw) {
     const buf = new ArrayBuffer(1 + STATE_BYTES);
     const dv = new DataView(buf);
-    new Uint8Array(buf)[0] = TYPE_STATE;
+    const u8 = new Uint8Array(buf);
+    u8[0] = TYPE_STATE;
     dv.setUint32(1, this.publicId ?? 0, true);
     dv.setFloat32(5, x, true);
     dv.setFloat32(9, y, true);
     dv.setFloat32(13, z, true);
     dv.setFloat32(17, yaw, true);
+    u8[1 + STATE_BYTES - 1] = this.stateByte;
     return buf;
   }
   startUpload() {
@@ -269,6 +299,33 @@ if (commonTails < 5)
   throw new Error(`only ${commonTails} time+weather tails were byte-identical across A/C, expected >= 5`);
 console.log(`${commonTails} time+weather tails byte-identical across tabs (M37 expectation holds)`);
 
+/* 7. (e) M42: held-item flags. Tab A raises the state byte bit1 (spear in
+ *    hand); the stamped state on EVERY tab must show A with the bit while
+ *    B/C stay byte-identical to before (bit0 + rest of the frame untouched).
+ *    The stamp is still one 21 B entry - no wire growth. */
+a.stateByte = 2;   // STATE_HELD_SPEAR
+await a.waitFor(() => a.ticks.some(t => {
+  const p = t.players.get(a.publicId);
+  return p && (p.state & 2) !== 0;
+}), 'A\'s spear bit in a stamped state', 5000);
+const heldTick = a.ticks.filter(t => {
+  const p = t.players.get(a.publicId);
+  return p && (p.state & 2) !== 0 && p.state === 2;   // exactly bit1 (bit0 stays 0)
+}).at(-1);
+if (!heldTick)
+  throw new Error('A\'s stamped state carried the spear bit with another bit set (expected state byte 2)');
+const aEntry = stateEntry(heldTick.buf, a.publicId);
+if (aEntry[STATE_BYTES - 1] !== 2)
+  throw new Error('A\'s stamped state byte is not 2 (spear bit only)');
+const bHas = b.ticks.some(t => bufEq(stateEntry(t.buf, a.publicId), aEntry));
+const cHas = c.ticks.some(t => bufEq(stateEntry(t.buf, a.publicId), aEntry));
+if (!bHas || !cHas)
+  throw new Error('the held-spear stamp of A was not byte-identical on B/C (B=' + bHas + ' C=' + cHas + ')');
+const bSt = heldTick.players.get(b.publicId), cSt = heldTick.players.get(c.publicId);
+if (bSt && (bSt.state & 2) !== 0) throw new Error('B\'s stamp must not carry the spear bit');
+if (cSt && (cSt.state & 2) !== 0) throw new Error('C\'s stamp must not carry the spear bit');
+console.log('M42: A\'s held-spear stamp (state byte 2) relayed byte-identical to B/C; B/C stamps kept their own bits; frame size unchanged (21 B)');
+
 a.close(); b.close(); c.close();
-console.log('E2E_OK - M38: 3-tab player positions server-determined; stamps byte-identical; teleport rejected; no client-authority fallback');
+console.log('E2E_OK - M38: 3-tab player positions server-determined; stamps byte-identical; teleport rejected; M42 held-spear flag relays in the 21 B state; no client-authority fallback');
 process.exit(0);

@@ -90,6 +90,52 @@ const campPayload = () => {
   p.set(f32(CAMP.rot), 8);
   return p;
 };
+const firePayload = (x, z) => {   // M42: kind-8 fire payload (f32 x, f32 z)
+  const p = new Uint8Array(12);
+  p.set(f32(x), 0);
+  p.set(f32(z), 4);
+  return p;
+};
+
+/* M42: the client's heightAt (index.html, the JS reference the server's
+ * det::heightAt is bit-exact to) - used only to pick guaranteed-dry fire
+ * spots for the test, never to compare against the server. */
+const ISLAND_R_E2E = 210;
+function hash2(ix, iz) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iz, 668265263) + Math.imul(1337, 974634) | 0;
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  n ^= n >>> 16;
+  return (n >>> 0) / 4294967296;
+}
+function vnoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = hash2(ix, iz), b = hash2(ix + 1, iz), c = hash2(ix, iz + 1), d = hash2(ix + 1, iz + 1);
+  return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+}
+function fbm(x, z, oct) {
+  let v = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) { v += amp * vnoise(x * f, z * f); amp *= 0.5; f *= 2.03; }
+  return v;
+}
+function heightAt(x, z) {
+  const r = Math.hypot(x, z) / ISLAND_R_E2E;
+  if (r > 1.2) return -8;
+  const fall = Math.max(0, 1 - r * r);
+  const shore = 0.75 + 0.5 * fbm(x * 0.02, z * 0.02, 3);
+  const n = fbm(x * 0.012, z * 0.012, 5);
+  const n2 = fbm(x * 0.05 + 7.31, z * 0.05 - 2.17, 3);
+  let h = 26 * fall * shore * (0.35 + 0.65 * n) + (n2 - 0.5) * 3 * fall;
+  const deep = Math.min(1, Math.max(0, (r - 1) / 0.2));
+  return h * (1 - deep) + -8 * deep;
+}
+function drySpot(step, hmin = 0.35) {
+  for (let x = -ISLAND_R_E2E + 10; x <= ISLAND_R_E2E - 10; x += step)
+    for (let z = -ISLAND_R_E2E + 10; z <= ISLAND_R_E2E - 10; z += step)
+      if (heightAt(x, z) >= hmin) return { x, z };
+  throw new Error('no dry spot found for the fire test');
+}
 
 /* The relayed (server-stamped) 23B edit body, for byte comparisons. */
 function editBody(publicId, kind, entityIndex, payload = []) {
@@ -266,6 +312,13 @@ async function main() {
     accepted.push(body);
   }
 
+  // M42: the G-key fire is a kind-8 world edit (payload f32 x, f32 z):
+  // accepted at the camp spot and relayed byte-identical to all three tabs.
+  const fire1 = editBody(A.publicId, 8, 0, firePayload(CAMP.x, CAMP.z));
+  A.sendEdit(8, 0, firePayload(CAMP.x, CAMP.z));
+  await expectRelay(A, 'camp fire', fire1, 'the camp fire edit (kind 8)');
+  accepted.push(fire1);
+
   /* ---- (b) invalid edits: rejected with a reason, NEVER relayed ---- */
 
   const expectReject = (tag, what, kindMatch, reasonSub) =>
@@ -335,6 +388,29 @@ async function main() {
   // 6. a spent-palm wind drop can only come from a storm; out of scope here,
   //    but the store's cocos>0 guard keeps the two sides in sync (gtest).
 
+  // 7. M42: an underwater fire (r > 1.2 -> heightAt -8): "the water would
+  //    put it out" - rejected to the sender, never relayed.
+  const wetFire = editBody(A.publicId, 8, 0, firePayload(300, 300));
+  A.sendEdit(8, 0, firePayload(300, 300));
+  await expectReject('underwater fire', 'a fire at (300,300)', 8, 'the water would put it out');
+  await expectNotRelayed('the underwater fire', wetFire);
+
+  // 8. M42: the server's 5-fire cap (tracked G-fires): four more valid fires
+  //    fill the cap, the sixth is refused with "too many fires".
+  const spots = [drySpot(37), drySpot(41), drySpot(53), drySpot(61)];
+  for (let i = 0; i < 4; i++) {
+    const body = editBody(A.publicId, 8, 0, firePayload(spots[i].x, spots[i].z));
+    A.sendEdit(8, 0, firePayload(spots[i].x, spots[i].z));
+    await expectRelay(A, `fire ${i + 2}`, body, `the dry fire #${i + 2} (kind 8)`);
+    accepted.push(body);
+  }
+  const sixth = { ...spots[0], x: spots[0].x + 2.5, z: spots[0].z + 2.5 };
+  if (heightAt(sixth.x, sixth.z) < 0.35) sixth.z += 3;   // keep the cap gate the only gate
+  const overCap = editBody(A.publicId, 8, 0, firePayload(sixth.x, sixth.z));
+  A.sendEdit(8, 0, firePayload(sixth.x, sixth.z));
+  await expectReject('sixth fire', 'the 6th fire (cap 5)', 8, 'too many fires');
+  await expectNotRelayed('the sixth fire', overCap);
+
   /* ---- (c) M40: no authority gate - tab B (the ex-follower) edits and
      the server accepts + relays it exactly like A's (palm 1: 2 -> 1) ---- */
   const bPalm = editBody(B.publicId, 0, 1, [1]);
@@ -358,8 +434,8 @@ async function main() {
       throw new Error(`D's edit sync[${i}] is not byte-identical to the relayed edit #${i + 1}`);
   });
 
-  console.log(`${accepted.length} valid edits relayed byte-identical across all three tabs`);
-  console.log('5 invalid edits rejected with explicit reasons (palm dry / wrong payload / plant depleted / duplicate camp / build 12.5u from camp) - none relayed');
+  console.log(`${accepted.length} valid edits relayed byte-identical across all three tabs (incl. M42 fire edits)`);
+  console.log('7 invalid edits rejected with explicit reasons (palm dry / wrong payload / plant depleted / duplicate camp / build 12.5u from camp / M42 underwater fire / M42 6th fire over cap) - none relayed');
   console.log('tab B (ex-follower) edit accepted + relayed - no authority gate (M40; the server validates)');
   console.log(`late joiner D replayed all ${accepted.length} accepted edits byte-identically (type-30)`);
   console.log('E2E_OK - M39: edits validated server-side against the world store; invalid edits rejected + never relayed; valid edits converge identically');
