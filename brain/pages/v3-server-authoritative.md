@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, serverbase, authority]
 created: "2026-10-24T16:59:28"
-updated: "2026-10-25T13:45:28"
+updated: "2026-10-25T14:31:44"
 ---
 
 <!-- compiled_truth -->
@@ -22,10 +22,11 @@ updated: "2026-10-25T13:45:28"
 - **M36** ✅ ‒ Server animal sim part 2: `AnimalSim` now simulates ALL 51 animals (the full ten-species registry, ROSTER_COUNT=51; new bands 256..260 monkeys, 320..323 lizards, 384..389 snakes, 448..450 pelicans, 512..513 sharks, 576..578 spiders). The ctor converts the M13 draw-only replays into stored entities (same draws, dir/phase from the two placeholder draws), then APPENDS pelican/shark/spider spawn AFTER the M14 crabs (client source order; pelican perches = the 3 highest palms >25u from spawn, stable-sort by trunkH desc, top = base+tilt*trunkH*0.98, groundH+trunkH; shark patrol-only with the custom `heightAt <= -0.6` terrain veto; spiders night-creep without the player raid). Alarm bus ported (M16): `alarms_` + `updateAlarms` once per step before both phases, `alarmsNear`/`alarmRaise`; receivers wired for every ported species (fish scatter, crabs bolt, monkeys listen-freeze, lizards spook, snakes freeze, pelicans flee-high, spiders flee) and the ONE organic emitter: monkey shriek (a live tiger <14u of the monkey's home during dayFactor>=0.25; screamT=4 + alarm 'scream' r20 t4). Player-dependent emitters (tiger strike, shark curious/bite, gull dive tell, panicWildlife/lightning) deliberately NOT ported ‒ they arrive with M37 (weather) and M38 (player authority). The M13 spawn goldens pin the converted entities; the vibs_animals dump pair now dumps all 51. Client: with `?mp=` connected `updateAnimals` returns early (local sim fully disabled on every tab incl. authority); `mpAnimalsFrame` now also lerps grp y (pelican altitude, shark depth) and takes the fish live count n from the state byte (state=0..12, the M36 extension of the dead bit; lib/mp.js exposes raw state); new presentation pass `mpAnimalsPresent` (mp-only, zero rng) keeps the puppets alive: schools run the factored `schoolPlace` instance loop, grounded species snap y to heightAt(server x/z), the gull adds GULL_ALT, pelican/shark keep the just-lerped y, legs/wings swing from per-frame displacement (>0.05 = moving). The M30 type-29 client upload still relays the full 51-entry roster until M40. Verified: 152/152 ServerBase ctest (incl. `vibs_animals_matches_js_reference` byte-identity for all 51), smoke M36 block (SP steps / connected-inert / 51-slot adoption incl. shark depth + pelican altitude + fish n-from-state / type-29 upload 51 entries / SP steps again), headless E2E `e2e-animals` (3 tabs: exactly 51 entries, byte-identical, evolving), world payload re-verified unchanged (29220 B).
 - **M40** ✅ ‒ Protocol v2 hardening + full v2 relay removal + server-restart resilience: the client is now zero-authority (types 29/32 retired, tick head shrunk to `[27][flags]` with sections from byte 2, authority election + world mutation locks deleted, any connected tab may edit and the server validates; the server clock is adopted by every tab) and the world store survives relay restarts (`vibsurvivors-worldstore.bin` in the relay CWD; pre-restart edits replay byte-identically via type-30 `EDIT_SYNC`, the server clock resumes, not resets) ‒ detail in [[m40-zero-client-authority]].
 - **M41** ✅ ‒ Final v3 integration pass: NO new systems ‒ the 3-tab play + mid-play-reconnect gate (`smoke/e2e-play.mjs`, own relay :3012: world blocks byte-identical, edits from different tabs relay byte-identically, bit0/bit2/time+weather byte-identical across all tabs on common ticks, C drops mid-play and rejoins with exact EDIT_SYNC catch-up, zero divergence) and the payload perf budgets (`smoke/e2e-perf.mjs`, own relay :3013: join 29220 B, steady tick 1310 B, 38.7 KB/s downlink + 660 B/s uplink per client, all under budget) ‒ detail + all measured numbers in [[m41-v3-integration-pass]].
+- **M42** ✅ ‒ MP shared-world visibility: fires become the 9th world edit kind (kind 8, payload f32 x/z, server-validated like all M39 edits and relayed/persisted/EDIT_SYNC-replayed by the existing M29/M39/M40 machinery; zero rng, flicker phase derived from position, (x,z) dedup keeps replay idempotent) and the held-spear flag packs into state byte 20 bit1 (STATE_BYTES stays 21, the server relays the byte opaquely ‒ zero server parse change); remote avatars carry the spear, driven per tick from the held bit; single-player unaffected; tick budget unchanged (1310 B) ‒ detail in [[m42-mp-shared-world-visibility]].
 
-The single-player determinism contract (island = f(SEED 1337, gameMin, edits); bit-identical without `?mp=`) is preserved throughout the v3 transition. **All of M32-M41 are landed** (M41 closes the arc); MP follow-on requirements M42-M44 (remote camp/structure/fire + held-item visibility, remote-player animation, vegetation placement ground-clamp/canopy-alignment fix keeping placement deterministic) build on the v3 world.
+The single-player determinism contract (island = f(SEED 1337, gameMin, edits); bit-identical without `?mp=`) is preserved throughout the v3 transition. **All of M32-M42 are landed** (M41 closes the arc; M42 closes the first post-v3 follow-on); the remaining MP follow-ons are M43-M44 (remote-player procedural animation ‒ the reserved held-state bits 2-7 are where pose bits go, and the vegetation placement ground-clamp/canopy-alignment fix keeping placement deterministic), all built on the v3 world.
 
-Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-mp-world-state]], [[m30-mp-animals]], [[m32-cpp-determinism-port]], [[multiplayer-deferred-serverbase]], [[m41-v3-integration-pass]].
+Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-mp-world-state]], [[m30-mp-animals]], [[m32-cpp-determinism-port]], [[multiplayer-deferred-serverbase]], [[m41-v3-integration-pass]], [[m42-mp-shared-world-visibility]].
 
 
 ## Timeline
@@ -94,4 +95,10 @@ Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-m
   kind: decision
   summary: "M41 landed: milestone plan now shows M32-M41 all ✅ (M41 = final integration pass, e2e-play gate + e2e-perf budgets); follow-ons M42-M44; links [[m41-v3-integration-pass]]"
   source: brain update-truth
+  affects: [v3-server-authoritative]
+
+- time: 2026-10-25T14:31:44
+  kind: decision
+  summary: "M42 landed: fires = world edit kind 8 (server-validated, relayed/persisted/replayed) + held-spear flag in state byte 20 bit1 (STATE_BYTES stays 21); M32-M42 all landed, follow-ons M43-M44; links [[m42-mp-shared-world-visibility]]"
+  source: "brain sync pass: commit 8fbf7c3 (range 9658e72..8fbf7c3)"
   affects: [v3-server-authoritative]
