@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-25T18:13:18.805Z._
+_Auto-generated. Last updated 2026-10-25T19:03:48.458Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -40,6 +40,7 @@ _Auto-generated. Last updated 2026-10-25T18:13:18.805Z._
 - [m7-vegetation-framework](pages/m7-vegetation-framework.md) — category: decision | tags: [vegetation, plants, foraging, determinism, rng, framework] | ## What shipped (M7 ‒ vegetation framework)
 - [m8-forage-foods](pages/m8-forage-foods.md) — category: decision | tags: [foraging, plants, food, poison, cooking, determinism] | ## What shipped (M8 ‒ edible + poisonous plants and vegetables)
 - [m9-medicinal-plants](pages/m9-medicinal-plants.md) — category: decision | tags: [medicinal, herb, infection, regrowth, wear, plants, tiger] | ## What shipped (M9 ‒ medicinal plants + harvesting/regrowth)
+- [mp-mode-selection](pages/mp-mode-selection.md) — category: decision | ## MP mode selection
 - [multiplayer-deferred-serverbase](pages/multiplayer-deferred-serverbase.md) — category: decision | Decided: multiplayer is a **later milestone (M27‒M31 in the renumbered PLAN G11; previously "M7" before the M0‒M31 split)**, implemented as
 - [threejs-no-build-stack](pages/threejs-no-build-stack.md) — category: decision | Decided: the client follows the house pattern exactly — Three.js **r0.158** vendored in `lib/` (copy from .
 - [v3-server-authoritative](pages/v3-server-authoritative.md) — category: decision | tags: [multiplayer, serverbase, authority] | ## The decision (v3: server is world-authority)

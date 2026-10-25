@@ -112,6 +112,7 @@
 <div id="dead"><h2>YOU DIED</h2><p><b>R</b> &mdash; wash ashore again (you lose what you were carrying)</p></div>
 <div id="won"></div>
 
+<script src="lib/cfg.js"></script>
 <script type="module">
 import * as THREE from 'three';
 
@@ -283,7 +284,17 @@ function scatter(n, hmin, hmax, minDist, maxAttempts = 4000) {
    animal spawns + the rng-ordering invariant); only the mesh build is
    deferred until the payload arrives. (Kept outside the dump harness's
    extracted generation regions, ServerBase/tests/vivs_world_dump.mjs.) */
-const MP_ON = new URLSearchParams(location.search).has('mp');
+/* MP mode ‒ deployment defaults come from lib/cfg.js (window.VIVS_CFG),
+   NOT from this file (no hard-coded URLs in code):
+   - explicit ?mp=host:port (or wss:// URL) always wins (dev / other servers)
+   - on VIVS_CFG.mpDomain the bare URL is MULTIPLAYER: players just open the
+     site and join the shared island (no url modification)
+   - ?sp forces single player there
+   - other hosts (localhost dev) stay single player unless ?mp= is given */
+const VIVS_CFG = (typeof window !== 'undefined' && window.VIVS_CFG) || {};
+const MP_QUERY = new URLSearchParams(location.search);
+const MP_ON = !!(MP_QUERY.has('mp') || (VIVS_CFG.mpHost && !MP_QUERY.has('sp') && location.hostname === VIVS_CFG.mpDomain));
+const MP_URL = MP_QUERY.get('mp') || (MP_ON ? VIVS_CFG.mpHost : null);
 let mpWorldBuilt = false;
 
 const palms = [];   /* {x,z,g,h, tx,tz, top, cocos, idx} ‒ M44: g=ground, h=trunk height */
@@ -5052,7 +5063,7 @@ function mpBuildWorld(w, force) {
  * world-edit + clock hooks.
  */
 {
-  const mpUrl = new URLSearchParams(location.search).get('mp');
+  const mpUrl = MP_URL;
   if (mpUrl) {
     const askMpName = () => {
       try {
