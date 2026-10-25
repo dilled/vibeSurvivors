@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, serverbase, authority]
 created: "2026-10-24T16:59:28"
-updated: "2026-10-25T09:58:24"
+updated: "2026-10-25T11:47:58"
 ---
 
 <!-- compiled_truth -->
@@ -77,3 +77,9 @@ Related: [[vivsurvivors-mp-relay]] (superseded v2 model + wire history), [[m29-m
   summary: "M38 landed: server player authority on the client - every tab (incl. the mover's own) reconciles its rig to the server's stamped transform with the exact M28 lerp semantics; self capture in lib/mp.js + mpSelfFrame in index.html; zero wire change (protocol v2, 21 B state); M29/M30 gates + authorityPublicId stay until M39/M40; detail in [[m38-server-player-authority]]"
   source: "brain sync pass: commit 9dbb259 (range 67e2d35..9dbb259)"
   affects: [v3-server-authoritative, m38-server-player-authority]
+
+- time: 2026-10-25T11:47:58
+  kind: decision
+  summary: "M39 landed: server applies + validates world edits against its in-memory, seed-derived WorldStore (per-kind validation; camp/structure placement rules use the SENDER's last accepted/stamped transform); accepts are stamped + relayed byte-identically, rejects go to the sender ALONE over the additive MSG_VIVS_EDIT_REJECT (type 34, never relayed/replayed); server-side growth is bit-exact vs the client (ctest byte-identity gate over 26000 steps); client parses type 34 (lib/mp.js onEditReject) and toasts it; MP-mode local save/load inert; WorldStore stays in-memory, restart resilience is M40; detail in [[m39-server-edit-validation]]"
+  source: "brain sync pass: commits 3122b11 + e116a4b (range 2e619d1..e116a4b)"
+  affects: [v3-server-authoritative, m39-server-edit-validation]
