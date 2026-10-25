@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [weather, rain, fire, plants, schedule, determinism]
 created: "2026-10-17T19:40:47"
-updated: "2026-10-18T01:39:41"
+updated: "2026-10-25T09:23:27"
 ---
 
 <!-- compiled_truth -->
@@ -61,3 +61,9 @@ M10 block (after M9): schedule determinism by replaying the generation draw orde
   summary: "The rain audio deferred to M23 has shipped: rain bed tracks weather.vis.rain in the [[m23-audio]] read-only tick (commit 4bb4e83)."
   source: commit 4bb4e83
   affects: [m23-audio]
+
+- time: 2026-10-25T09:23:27
+  kind: note
+  summary: "M37: in MP the server now owns the weather state (tick bit5); effectiveWeather() adopts it, and this local seeded schedule is the single-player fallback (see [[m37-server-time-weather]])"
+  source: M37
+  affects: [m10-weather-framework]

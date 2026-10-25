@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [weather, storm, lightning, wet, fire, animals, schedule, determinism]
 created: "2026-10-17T20:23:47"
-updated: "2026-10-18T01:39:41"
+updated: "2026-10-25T09:23:27"
 ---
 
 <!-- compiled_truth -->
@@ -48,3 +48,9 @@ M11 makes the storm a real survival event, not a visual: a fourth weather state 
   summary: "The storm audio deferred to M23 has shipped: storm wind bed tracks weather.vis.storm and doLightning triggers range-delayed thunder in [[m23-audio]] (commit 4bb4e83)."
   source: commit 4bb4e83
   affects: [m23-audio]
+
+- time: 2026-10-25T09:23:27
+  kind: note
+  summary: "M37: in MP the storm beats come from the server's event list (tick bit5), fired identically on every tab; the local per-segment event schedule is the single-player path (see [[m37-server-time-weather]])"
+  source: M37
+  affects: [m11-storm-gameplay]

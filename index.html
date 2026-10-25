@@ -981,7 +981,7 @@ function updateSchools(dt) {
     let ox = Math.sin(runT * 0.07 + s.phase) * 9;
     let oz = Math.cos(runT * 0.09 + s.phase * 1.7) * 7;
     let sc = 1;
-    const minW = weather.forced === 'storm' || weatherStateAt(gameMin) === 'storm' ? -0.8 : -0.3;
+    const minW = effectiveWeather() === 'storm' ? -0.8 : -0.3;   /* M37: server weather */
     while (sc > 0.15 && heightAt(s.bx + ox * sc, s.bz + oz * sc) > minW) sc -= 0.2;
     let tx = s.bx + ox * sc, tz = s.bz + oz * sc;
     if (minW < -0.3) {   /* M11: lagoon surge ‒ the fish leave the shallows (visual displacement) */
@@ -3803,7 +3803,15 @@ function douseUnshelteredFires() {
   if (n) toast('\u{1F327} the rain doused your fire' + (n > 1 ? 's' : ''));
 }
 function isWetSt(st) { return st === 'rain' || st === 'storm'; }   /* dousing, growth, soaking */
-function effectiveWeather() { return weather.forced || weatherStateAt(gameMin); }
+function effectiveWeather() {
+  /* M37: while MP-connected the SERVER owns the weather schedule (tick
+     bit5) and every tab adopts the server state; the debug pin
+     (weather.forced) still wins, and without a server the local schedule
+     (same seed, same story mode) is authoritative. */
+  if (weather.forced) return weather.forced;
+  if (mpApi && mpApi.connected() && mpApi.weather) return mpApi.weather.state;
+  return weatherStateAt(gameMin);
+}
 
 /* M11: lightning flash + one shared bolt (stub-safe: a thin box) */
 let stormFlash = 0, stormBoltT = 0;
@@ -3873,13 +3881,31 @@ function updateWeather(dt) {
   if (isWetSt(st)) douseUnshelteredFires();   /* idempotent per frame; torches stay lit */
   /* M11: fire the effective storm segment's precomputed events as they come due
      (lazy catch-up; gated on the effective state so a debug pin suppresses them) */
-  if (st === 'storm')
-    for (const ev of weatherSegAt(gameMin).evs)
-      if (!ev.done && ev.t <= gameMin) {
-        ev.done = true;
-        if (ev.kind === 'strike') doLightning(ev.x, ev.z);
-        else dropCoconutIfAny(ev.pi);
+  if (st === 'storm') {
+    if (mpApi && mpApi.connected() && mpApi.weather && mpApi.weather.events.length) {
+      /* M37: fire the SERVER's storm event list (tick bit5): the active
+         seg's full sorted events, per-index done set keyed by list
+         identity, the same lazy catch-up as the local path */
+      const evs = mpApi.weather.events;
+      const key = evs.length + ':' + evs[0].t + ':' + evs[evs.length - 1].t;
+      if (key !== mpWeatherEvKey) { mpWeatherEvKey = key; mpWeatherEvDone = new Set(); }
+      for (let i = 0; i < evs.length; i++) {
+        const ev = evs[i];
+        if (!mpWeatherEvDone.has(i) && ev.t <= gameMin) {
+          mpWeatherEvDone.add(i);
+          if (ev.kind === 0) doLightning(ev.a, ev.b);      /* strike (a=x, b=z) */
+          else dropCoconutIfAny(ev.a);                     /* wind drop (a=palmIdx) */
+        }
       }
+    } else {
+      for (const ev of weatherSegAt(gameMin).evs)
+        if (!ev.done && ev.t <= gameMin) {
+          ev.done = true;
+          if (ev.kind === 'strike') doLightning(ev.x, ev.z);
+          else dropCoconutIfAny(ev.pi);
+        }
+    }
+  }
   stormFlash = Math.max(0, stormFlash - dt * 3);
   if (stormBoltT > 0) { stormBoltT -= dt; bolt.visible = stormBoltT > 0; }
   else bolt.visible = false;
@@ -4227,7 +4253,7 @@ function updateSky(dt) {
     ? 'camp \u2014 ' + (['fence', 'shelter', 'bed', 'torch', 'raft'].filter((t) => camp.structures[t]).join(' \u00B7 ') || 'empty ground')   /* M20 */
       + (campIsLit() ? ' \u00B7 \u{1F525}lit' : '')
     : 'no camp \u2014 H on flat dry land';
-  const wst = weather.forced || weatherStateAt(gameMin);
+  const wst = effectiveWeather();   /* M37: the server's weather state (forced still wins) */
   const wGlyph = { clear: '\u2600', cloudy: '\u2601', rain: '\u{1F327}', storm: '\u26C8' }[wst];
   const hp = `⏱ ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  [${phase}]   ${wGlyph} ${wst}\n` +
             `🌿 ${zoneAt(heightAt(rig.position.x, rig.position.z))}   ·   ${fps | 0} fps\n` +
@@ -4497,7 +4523,7 @@ function frame(t) {
   /* survival: time, stats, world sim */
   if (started && !dead) {
     const pNow = (p0 + gameMin / 1800) % 1;
-    if (mpTimeAdopt !== 0) {   /* M29: follower adopts the authority's clock (snap) */
+    if (mpTimeAdopt !== 0) {   /* M37: adopt the server clock (snap; every tab, authority included) */
       gameMin = mpTimeAdopt;
       mpTimeAdopt = 0;
     } else {
@@ -4655,7 +4681,9 @@ function mpRemotesFrame(dt) {
  * world mutations. Everything here is inert without ?mp= (mpApi stays null)
  * and uses zero rng.
  */
-let mpTimeAdopt = 0;     /* pending authority clock (frame() consumes it) */
+let mpTimeAdopt = 0;     /* M37: pending server clock (frame() consumes it; every tab adopts) */
+let mpWeatherEvKey = null;    /* M37: identity of the server storm list being fired */
+let mpWeatherEvDone = new Set(); /* M37: per-index done set for that list */
 let mpLockToastT = 0;    /* cooldown for the world-locked toast */
 const mpPayloadU8 = (v) => { const b = new Uint8Array(12); b[0] = v & 0xff; return b; };
 const mpPayloadCamp = (x, z, rot) => {
@@ -5002,9 +5030,10 @@ function mpBuildWorld(w, force) {
         mpApplyWorldEdit(kind, eidx, payload);
       },
       onTime: (gm) => {
-        /* followers adopt the authority's clock; the authority keeps its own */
+        /* M37: EVERY tab adopts the server clock (bit4 is the server's own
+           clock now; the authority is clock-slaved too, so T-key / ?t= /
+           M25 load jumps snap back each tick - intended, don't "fix" it) */
         if (!Number.isFinite(gm)) return;
-        if (!mpApi.authorityId || mpApi.authorityId === mpApi.publicId) return;
         mpTimeAdopt = gm;
       },
       /* M30: the authority uploads its animal snapshot; followers apply

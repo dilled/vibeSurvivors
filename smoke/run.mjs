@@ -4992,6 +4992,237 @@ patched += `
     started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
   }
 }
+
+/* ---- M37: the server owns the clock and the weather schedule. Every tab
+   (the authority INCLUDED) adopts tick bit4; tick bit5 carries the server
+   weather state + the active storm seg's event list, which updateWeather
+   fires (per-index done set, keyed by list identity) instead of the local
+   segs. effectiveWeather() adopts the server state (debug pin still wins).
+   Without ?mp= the local schedule is authoritative. */
+{
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  let __t37 = 4e8;   /* far past every earlier block's lastT (negative-dt guard) */
+  const pump = (n) => {   /* M37-local: the driver's pump is out of scope here */
+    for (let i = 0; i < n; i++) {
+      const cb = globalThis.__rafCb; globalThis.__rafCb = null;
+      __t37 += 16.7; globalThis.__audioTime += 0.0167;
+      if (cb) cb(__t37);
+    }
+  };
+  const saveGameMin = gameMin, saveStarted = started, saveDead = dead;
+  const saveWon = won, saveOnRaft = onRaft;
+  const saveForced = weather.forced, saveLastState = weather.lastState, saveLastMin = weather.lastMin;
+  const saveVis = { cloudy: weather.vis.cloudy, rain: weather.vis.rain, storm: weather.vis.storm };
+  const saveFlash = stormFlash, saveBoltT = stormBoltT, saveBoltVis = bolt.visible;
+  const saveBoltPos = { x: bolt.position.x, y: bolt.position.y, z: bolt.position.z };
+  const saveFires = fires.slice(), saveItems = items.slice();
+  const saveCooking = fires.map((f) => f.cooking);
+  /* the M25 round-trip test deliberately left a string cooking on the fire;
+     normalize so updateFires can run, restore it on the way out */
+  for (const f of fires) if (typeof f.cooking === 'string') f.cooking = null;
+  const saveStats = Object.assign({}, stats);
+  const saveLearned = new Set(learned);
+  /* earlier blocks may have shaken these palms dry - guarantee stock */
+  palms[10].cocos = Math.max(palms[10].cocos, 2);
+  palms[42].cocos = Math.max(palms[42].cocos, 2);
+  palms[5].cocos = Math.max(palms[5].cocos, 2);
+  const saveCocos = { 5: palms[5].cocos, 10: palms[10].cocos, 42: palms[42].cocos };
+  const saveRig = { x: rig.position.x, y: rig.position.y, z: rig.position.z };
+
+  const sendTick = (auth, time, wstate, evs) => {
+    const parts = [];
+    const head = new Uint8Array(6);
+    let flags = 0;
+    if (time !== undefined) flags |= 1 << 4;
+    if (wstate !== undefined) flags |= 1 << 5;
+    head[0] = 27; head[1] = flags;
+    new DataView(head.buffer).setUint32(2, auth, true);
+    parts.push(head);
+    if (time !== undefined) {
+      const tb = new Uint8Array(4);
+      new DataView(tb.buffer).setFloat32(0, time, true);
+      parts.push(tb);
+    }
+    if (wstate !== undefined) {
+      /* M37: [u8 state][u32 nEvents LE][nEvents * 13B: u8 kind, f32 t, f32 a, f32 b] */
+      const wb = new Uint8Array(5 + evs.length * 13);
+      wb[0] = wstate;
+      new DataView(wb.buffer).setUint32(1, evs.length, true);
+      let o = 5;
+      for (const ev of evs) {
+        wb[o] = ev.kind;
+        new DataView(wb.buffer).setFloat32(o + 1, ev.t, true);
+        new DataView(wb.buffer).setFloat32(o + 5, ev.a, true);
+        new DataView(wb.buffer).setFloat32(o + 9, ev.b, true);
+        o += 13;
+      }
+      parts.push(wb);
+    }
+    const total = parts.reduce((s, q) => s + q.length, 0);
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const q of parts) { buf.set(q, off); off += q.length; }
+    wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
+  };
+
+  try {
+    /* 1. single-player: the local schedule is authoritative (no server) */
+    if (mpApi !== null) throw new Error('M37: mpApi leaked in from the M36 block');
+    weather.forced = null;
+    if (effectiveWeather() !== weatherStateAt(gameMin))
+      throw new Error('M37: without a server the local schedule must be authoritative');
+
+    /* 2. connect + join success (the M27/M35/M36 FakeWS pattern) */
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M37Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+      /* the game's own onTime: adopt the server clock (every tab, authority included) */
+      onTime: (gm) => { if (Number.isFinite(gm)) mpTimeAdopt = gm; },
+    });
+    mpApi = api;
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M37: the join success was not parsed');
+
+    /* 3. the SERVER clock is adopted by EVERY tab - this tab IS the
+       authority (publicId 110) and bit4 (the server's own clock) snaps it */
+    started = true; dead = false;
+    sendTick(110, 512.25, 0, []);
+    if (!api.weather || api.weather.state !== 'clear' || api.weather.events.length !== 0)
+      throw new Error('M37: the bit5 section did not parse to a clear weather state');
+    if (api.isAuthority() !== true)
+      throw new Error('M37: this tab is not recognized as the authority');
+    pump(1);
+    if (Math.abs(gameMin - 512.25) > 1e-4)
+      throw new Error('M37: the authority did not adopt the server clock: ' + gameMin);
+    if (effectiveWeather() !== 'clear')
+      throw new Error('M37: effectiveWeather did not adopt the server state');
+
+    /* 4. storm beats: the server's storm seg event list (the seed-1337
+       first-storm values, exactly what the server relays) fires drops and
+       the strike as the clock passes their t - each exactly once */
+    const stormEvs = [
+      { kind: 1, t: 1143.6854285947168, a: 10, b: 0 },
+      { kind: 1, t: 1155.154038978248, a: 42, b: 0 },
+      { kind: 0, t: 1168.5172978735109, a: 111.61525450549635, b: -71.26843317778255 },
+    ];
+    rig.position.set(spawn.x, heightAt(spawn.x, spawn.z), spawn.z);
+    sendTick(110, 1140.0, 3, stormEvs);
+    if (api.weather.state !== 'storm' || api.weather.events.length !== 3)
+      throw new Error('M37: the storm section did not parse: ' + JSON.stringify(api.weather));
+    if (effectiveWeather() !== 'storm')
+      throw new Error('M37: effectiveWeather must adopt the server storm');
+    pump(1);
+    if (Math.abs(gameMin - 1140.0) > 1e-4)
+      throw new Error('M37: the clock did not snap to the storm start: ' + gameMin);
+    if (palms[10].cocos !== saveCocos[10])
+      throw new Error('M37: the first drop fired before its t');
+
+    /* 5. clock passes t1: the palm-10 drop fires once */
+    sendTick(110, 1144.0, 3, stormEvs);
+    pump(1);
+    if (palms[10].cocos !== saveCocos[10] - 1)
+      throw new Error('M37: the palm-10 drop did not fire: ' + palms[10].cocos);
+    if (items.length !== saveItems.length + 1)
+      throw new Error('M37: the drop did not spawn a falling coconut');
+    pump(2);   // same list, clock still past t1: no second fire
+    if (palms[10].cocos !== saveCocos[10] - 1)
+      throw new Error('M37: the palm-10 drop fired twice');
+
+    /* 6. clock passes t2: the palm-42 drop fires */
+    sendTick(110, 1156.0, 3, stormEvs);
+    pump(1);
+    if (palms[42].cocos !== saveCocos[42] - 1)
+      throw new Error('M37: the palm-42 drop did not fire');
+
+    /* 7. clock passes t3: the strike fires (flash + bolt at the server x,z)
+       and does NOT fire again on the following frames */
+    sendTick(110, 1169.0, 3, stormEvs);
+    pump(1);
+    if (stormFlash < 0.5)
+      throw new Error('M37: the strike did not flash: ' + stormFlash);
+    if (bolt.visible !== true)
+      throw new Error('M37: the bolt is not visible after the strike');
+    if (Math.abs(bolt.position.x - 111.61525450549635) > 1e-3 ||
+        Math.abs(bolt.position.z + 71.26843317778255) > 1e-3)
+      throw new Error('M37: the bolt is not at the server strike position');
+    pump(3);
+    if (palms[42].cocos !== saveCocos[42] - 1 || palms[10].cocos !== saveCocos[10] - 1)
+      throw new Error('M37: the earlier drops re-fired after the strike');
+
+    /* 8. a NEW server list (the storm seg advanced) resets the done set:
+       a new list identity re-fires its own events from scratch */
+    sendTick(110, 1170.0, 3, [{ kind: 1, t: 1169.5, a: 5, b: 0 }]);
+    pump(1);
+    if (palms[5].cocos !== saveCocos[5] - 1)
+      throw new Error('M37: the new list drop did not fire (done set not reset)');
+    pump(2);
+    if (palms[5].cocos !== saveCocos[5] - 1)
+      throw new Error('M37: the new list drop fired twice');
+
+    /* 9. the M30 upload side is untouched: the 30 Hz loop still relays
+       type 32 (the clock; the server only tracks it for plausibility now) */
+    intervals[0].fn();
+    {
+      const up = wsInstances[0].sent.slice(-10)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)))
+        .find((d) => d[0] === 32);
+      if (!up) throw new Error('M37: the state loop no longer uploads type 32');
+      if (up.length !== 1 + 4) throw new Error('M37: the type-32 upload is malformed');
+      const upT = new DataView(up.buffer, up.byteOffset).getFloat32(1, true);
+      if (Math.abs(upT - gameMin) > 0.1)
+        throw new Error('M37: the type-32 upload does not carry the clock: ' + upT);
+    }
+
+    /* 10. back to single-player: the local schedule is authoritative again */
+    api.close();
+    mpApi = null;
+    if (effectiveWeather() !== weatherStateAt(gameMin))
+      throw new Error('M37: after disconnect the local schedule must win again');
+
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    gameMin = saveGameMin;
+    mpTimeAdopt = 0;
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+    weather.forced = saveForced;
+    weather.lastState = saveLastState; weather.lastMin = saveLastMin;
+    weather.vis.cloudy = saveVis.cloudy; weather.vis.rain = saveVis.rain; weather.vis.storm = saveVis.storm;
+    stormFlash = saveFlash; stormBoltT = saveBoltT; bolt.visible = saveBoltVis;
+    bolt.position.set(saveBoltPos.x, saveBoltPos.y, saveBoltPos.z);
+    fires.length = 0; fires.push(...saveFires);
+    fires.forEach((f, i) => { f.cooking = saveCooking[i]; });
+    items.length = 0; items.push(...saveItems);
+    Object.assign(stats, saveStats);
+    learned.clear(); for (const k of saveLearned) learned.add(k);
+    palms[5].cocos = saveCocos[5]; palms[10].cocos = saveCocos[10]; palms[42].cocos = saveCocos[42];
+    rig.position.set(saveRig.x, saveRig.y, saveRig.z);
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);
