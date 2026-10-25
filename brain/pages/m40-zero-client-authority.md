@@ -4,7 +4,7 @@ title: "M40 ‒ Protocol v2 hardening + full v2 relay removal: zero client autho
 category: decision
 status: active
 created: "2026-10-25T13:12:24"
-updated: "2026-10-25T13:12:24"
+updated: "2026-10-25T13:26:21"
 ---
 
 <!-- compiled_truth -->
@@ -16,7 +16,7 @@ head is GONE. The 30 Hz client uplink is **state-only**: type 26 (21B) plus
 type-28 edits from ANY connected tab. Types 29 (animal upload) and 32 (clock
 upload) are RETIRED: the client never sends them and the MessageRouter
 discards inbound 29/32. Tick bit2 is KEPT ‒ it now carries the
-SERVER-SIMULATED animal roster ([[m35-server-animals]]/[[m36-animals-full-roster]]),
+SERVER-SIMULATED animal roster (M35/M36 server sim, detail in [[v3-server-authoritative]]),
 not the retired client upload.
 
 Client (lib/mp.js + index.html): `authorityId`, `isAuthority()`,
@@ -60,4 +60,10 @@ the clock resumes, not resets.
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: "M40 implementation (2026-10-25)"
+  affects: [m40-zero-client-authority]
+
+- time: 2026-10-25T13:26:21
+  kind: decision
+  summary: "Fixed broken links: M35/M36 server-sim facts live in [[v3-server-authoritative]], not in non-existent pages"
+  source: "brain sync pass: commit 3a4a34e (M40, range 1b4b084..3a4a34e)"
   affects: [m40-zero-client-authority]
