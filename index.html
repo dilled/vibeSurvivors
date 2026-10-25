@@ -779,12 +779,12 @@ window.addEventListener('keydown', (e) => {
       rig.position.copy(spawn); rig.position.y = Math.max(heightAt(spawn.x, spawn.z), WATER - 0.25);
     }
   }
-  if (e.code === 'KeyE') actUse();
-  if (e.code === 'KeyC') eatCoconut();
-  if (e.code === 'KeyF') eatFish();
-  if (e.code === 'KeyV') eatCrab();
-  if (e.code === 'KeyQ') eatGathered();   /* M8: eat foraged food (safe first, poisons last) */
-  if (e.code === 'KeyM') useHerb();        /* M9: chew a healing herb (cures the festering wound) */
+  if (e.code === 'KeyE') { actUse(); interactT = 0.45; }   /* M43: interact pose (one-shot) */
+  if (e.code === 'KeyC') { eatCoconut(); interactT = 0.45; }   /* M43 */
+  if (e.code === 'KeyF') { eatFish(); interactT = 0.45; }   /* M43 */
+  if (e.code === 'KeyV') { eatCrab(); interactT = 0.45; }   /* M43 */
+  if (e.code === 'KeyQ') { eatGathered(); interactT = 0.45; }   /* M8: eat foraged food (safe first, poisons last); M43 */
+  if (e.code === 'KeyM') { useHerb(); interactT = 0.45; }        /* M9: chew a healing herb (cures the festering wound); M43 */
   if (e.code === 'KeyG') actFire();
   if (e.code === 'KeyB') actCraftSpear();
   if (e.code === 'KeyX') actStrike();
@@ -4518,6 +4518,8 @@ function frame(t) {
   rig.legL.rotation.x = sw; rig.legR.rotation.x = -sw;
   rig.armL.rotation.x = -sw * 0.6;
   rig.armR.rotation.x = sw * 0.6 + (spearSwing > 0 ? -Math.sin((0.35 - spearSwing) * 18) * 1.2 : 0);
+  mpLocalMoving = started && !dead && moving;   /* M43: mirrors land walking + raft rowing */
+  mpLocalRun = mpLocalMoving && (keys['ShiftLeft'] || keys['ShiftRight']);
   mpSelfFrame(dt);      /* M38: server player authority ‒ reconcile own rig to the server stamp */
   mpRemotesFrame(dt);   /* M28: remote-player presence (null-guarded, inert single-player) */
 
@@ -4563,6 +4565,7 @@ function frame(t) {
   mapTick(dt);   /* M18: walked cells + proximity discovery (player-side only) */
   journalTick(dt);   /* M19: first-sighting discoveries (player-side only) */
   spearSwing = Math.max(0, spearSwing - dt);
+  interactT = Math.max(0, interactT - dt);   /* M43 */
   updateItems(dt);
   updateFires(dt);
   updateTorchLights(dt);
@@ -4596,7 +4599,9 @@ requestAnimationFrame(frame);
  * ?mp= mpApi stays null and everything here is inert.
  */
 let mpApi = null;                       /* set by the ?mp= block below */
-const mpAvatars = new Map();            /* publicId -> {grp, sprite, canvas, tex, name, x, y, z, yaw} */
+let mpLocalMoving = false, mpLocalRun = false;   /* M43: this tab's action state, refreshed every frame in frame() */
+let interactT = 0;                   /* M43: one-shot interact pose timer (E / eat keys) */
+const mpAvatars = new Map();            /* publicId -> {grp, sprite, canvas, tex, name, x, y, z, yaw, limbs, pose} */
 const MP_AVATAR_COLORS = [0x7a8a5a, 0x8a3a2e, 0x2e6e8a, 0x8a6a2e, 0x6a2e8a,
                           0x2e8a7a, 0x8a2e5a, 0x4a6a8a, 0x5a8a2e, 0x8a4a4a];
 const mpAvatarColor = (id) => MP_AVATAR_COLORS[(((id * 0x9E3779B1) >>> 0) % MP_AVATAR_COLORS.length)];   /* zero-rng */
@@ -4607,17 +4612,27 @@ function makeMpAvatar(id) {
   const pants = new THREE.MeshLambertMaterial({ color: 0x4a5568 });
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.32), shirt); torso.position.y = 1.15;
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skin); head.position.y = 1.72;
+  /* M43: limbs are pivot groups (same structure as the local rig, index.html
+   * rig builder) so the walk cycle rotates them about the hip/shoulder; the
+   * mesh child keeps the exact old resting geometry/center (legs 0.375,
+   * arms 1.32). */
   const legGeo = new THREE.BoxGeometry(0.22, 0.75, 0.26);
-  const legL = new THREE.Mesh(legGeo, pants); legL.position.set(-0.14, 0.375, 0);
-  const legR = new THREE.Mesh(legGeo, pants); legR.position.set(0.14, 0.375, 0);
+  const legL = new THREE.Group(); legL.position.set(-0.14, 0.75, 0);
+  const legLM = new THREE.Mesh(legGeo, pants); legLM.position.y = -0.375; legL.add(legLM);
+  const legR = new THREE.Group(); legR.position.set(0.14, 0.75, 0);
+  const legRM = new THREE.Mesh(legGeo, pants); legRM.position.y = -0.375; legR.add(legRM);
   const armGeo = new THREE.BoxGeometry(0.18, 0.66, 0.2);
-  const armL = new THREE.Mesh(armGeo, shirt); armL.position.set(-0.38, 1.32, 0);
-  const armR = new THREE.Mesh(armGeo, shirt); armR.position.set(0.38, 1.32, 0);
+  const armL = new THREE.Group(); armL.position.set(-0.38, 1.65, 0);
+  const armLM = new THREE.Mesh(armGeo, shirt); armLM.position.y = -0.33; armL.add(armLM);
+  const armR = new THREE.Group(); armR.position.set(0.38, 1.65, 0);
+  const armRM = new THREE.Mesh(armGeo, shirt); armRM.position.y = -0.33; armR.add(armRM);
   grp.add(torso, head, legL, legR, armL, armR);
   /* M42: held spear on the right arm (same look as the local spearMesh;
-   * visibility follows the state byte's held bit every tick) */
+   * visibility follows the state byte's held bit every tick). M43: it is now a
+   * child of the armR PIVOT, so y compensates for the -0.33 mesh shift and the
+   * spear follows the arm through the walk/attack swing. */
   const spearG = makeSpearGroup();
-  spearG.position.set(0.02, -0.3, 0.25);
+  spearG.position.set(0.02, -0.63, 0.25);
   spearG.rotation.x = -0.35;
   spearG.visible = false;
   armR.add(spearG);
@@ -4629,7 +4644,9 @@ function makeMpAvatar(id) {
   sprite.scale.set(1.8, 0.32, 1);
   sprite.visible = false;                       /* shown once a name arrives */
   grp.add(sprite);
-  return { grp, sprite, canvas, tex, name: null, x: 0, y: 0, z: 0, yaw: 0, spear: spearG };
+  return { grp, sprite, canvas, tex, name: null, x: 0, y: 0, z: 0, yaw: 0, spear: spearG,
+           legL, legR, armL, armR,
+           walkPhase: 0, attackT: 0, interactT: 0, prevAction: 0 };   /* M43: pose state */
 }
 function drawMpNameTag(av, text) {
   av.name = text;
@@ -4659,6 +4676,7 @@ function mpRemotesFrame(dt) {
     if (!av) {                                  /* first sight: snap, never lerp from origin */
       av = makeMpAvatar(id);
       av.x = p.x; av.y = p.y; av.z = p.z; av.yaw = p.yaw;
+      av.prevAction = (p.action | 0);          /* M43: adopt the pose instantly, no blend from rest */
       scene.add(av.grp);
       mpAvatars.set(id, av);
     } else {
@@ -4675,6 +4693,28 @@ function mpRemotesFrame(dt) {
     }
     av.grp.position.set(av.x, av.y, av.z);
     av.grp.rotation.y = av.yaw;
+    /* M43: pose layer. Purely additive on top of the transform lerp above ‒ it
+     * only writes limb rotations and a one-shot body lean, never position or
+     * yaw, so it cannot desync the lerp. Speed is observed from the lerped
+     * motion (phase is receiver-derived and intentionally NOT wire-synced);
+     * SLEEP renders as idle (sleep is instant in this game). */
+    const sp = dt > 0 ? Math.min(10, Math.hypot(p.x - av.x, p.z - av.z) / dt) : 0;
+    const act = p.action | 0;
+    if (act === MP_ACTION_WALK || act === MP_ACTION_RUN) av.walkPhase += sp * dt * 1.9;
+    const sw = ((act === MP_ACTION_WALK || act === MP_ACTION_RUN) && sp > 0.5) ? Math.sin(av.walkPhase) * 0.7 : 0;
+    const kA = 1 - Math.exp(-dt * 12);   /* idle blend: eases limbs back to rest */
+    av.legL.rotation.x += (sw - av.legL.rotation.x) * kA;
+    av.legR.rotation.x += (-sw - av.legR.rotation.x) * kA;
+    av.armL.rotation.x += (-sw * 0.6 - av.armL.rotation.x) * kA;
+    if (act === MP_ACTION_ATTACK && av.prevAction !== MP_ACTION_ATTACK) av.attackT = 0.35;   /* rising edge */
+    if (act === MP_ACTION_INTERACT && av.prevAction !== MP_ACTION_INTERACT) av.interactT = 0.45;   /* rising edge */
+    let armRT = sw * 0.6;
+    if (av.attackT > 0) armRT += -Math.sin((0.35 - av.attackT) * 18) * 1.2;   /* same swing as the local rig */
+    av.armR.rotation.x += (armRT - av.armR.rotation.x) * kA;
+    av.attackT = Math.max(0, av.attackT - dt);
+    av.interactT = Math.max(0, av.interactT - dt);
+    av.grp.rotation.x = av.interactT > 0 ? Math.sin(Math.PI * (1 - av.interactT / 0.45)) * 0.35 : 0;   /* one-shot forward lean */
+    av.prevAction = act;
     if (p.name && p.name !== av.name) drawMpNameTag(av, p.name);   /* names arrive after players */
     av.sprite.visible = !!p.name;
     av.spear.visible = !!(p.held & MP_HELD_SPEAR);   /* M42: held spear on remote avatars */
@@ -4757,6 +4797,9 @@ const mpPayloadFire = (x, z) => {   /* M42: kind-8 fire payload (f32 x, f32 z) *
  * is safe.
  */
 const MP_HELD_SPEAR = 1 << 1;   /* M42: held-item bit of the state byte (lib/mp.js STATE_HELD_SPEAR) */
+/* M43: action enum, state byte bits 2-4 (lib/mp.js STATE_ACTION_*) */
+const MP_ACTION_IDLE = 0, MP_ACTION_WALK = 1, MP_ACTION_RUN = 2,
+      MP_ACTION_ATTACK = 3, MP_ACTION_INTERACT = 4, MP_ACTION_SLEEP = 5;
 function mpApplyWorldEdit(kind, entityIndex, payload) {
   if (!payload || kind > 8) return;
   if (kind === 0) {              /* palm: hide the dropped crowns (no falling items on replay) */
@@ -5053,6 +5096,15 @@ function mpBuildWorld(w, force) {
       displayName: await askMpName(),
       inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
       held: () => (spear ? MP_HELD_SPEAR : 0),   /* M42: state byte bit1 (has spear, not swinging) */
+      /* M43: state byte bits 2-4 ‒ the action enum. One-shots ride over the
+         movement state (attack/interact fire while the walk cycle continues),
+         matching the local pose math. SLEEP is never sent: sleep is instant. */
+      action: () => {
+        if (spearSwing > 0) return MP_ACTION_ATTACK;
+        if (interactT > 0) return MP_ACTION_INTERACT;
+        if (mpLocalMoving) return mpLocalRun ? MP_ACTION_RUN : MP_ACTION_WALK;
+        return MP_ACTION_IDLE;
+      },
       /* M34: build the vegetation world from the server's placement block */
       onWorld: (w) => mpBuildWorld(w),
       /* M29: shared deterministic world state (M40: state uplink only -

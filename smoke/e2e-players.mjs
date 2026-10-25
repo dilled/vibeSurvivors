@@ -15,7 +15,11 @@
 //   (e) M42: the state byte's held-item bits ride the stamped state - tab A
 //       sets bit1 (spear in hand) and every tab sees A's 21 B stamp with the
 //       bit, byte-identically, while B/C stamps stay bit-identical (bit0
-//       underwater and the rest of the frame untouched).
+//       underwater and the rest of the frame untouched);
+//   (f) M43: the state byte's action field (bits 2-4) rides the stamped
+//       state - tab A uploads WALK (1 << 2 = 0x04) and every tab sees A's
+//       stamp with the field, byte-identically, while B/C action bits stay 0
+//       (the server relays the byte opaquely; no wire growth).
 // Data-level convergence, the M27-M37 precedent (no chrome).
 //
 // Usage:
@@ -326,6 +330,36 @@ if (bSt && (bSt.state & 2) !== 0) throw new Error('B\'s stamp must not carry the
 if (cSt && (cSt.state & 2) !== 0) throw new Error('C\'s stamp must not carry the spear bit');
 console.log('M42: A\'s held-spear stamp (state byte 2) relayed byte-identical to B/C; B/C stamps kept their own bits; frame size unchanged (21 B)');
 
+/* 8. (f) M43: the action field (bits 2-4). Tab A uploads WALK
+ *    (STATE_ACTION_WALK=1 << 2 = 0x04); the stamped state on EVERY tab must
+ *    carry A's action field while B/C keep action 0 (the server relays the
+ *    byte opaquely - the pre-reserved bits needed no protocol change). */
+a.stateByte = 0x04;   // STATE_ACTION_WALK << STATE_ACTION_SHIFT
+await a.waitFor(() => a.ticks.some(t => {
+  const p = t.players.get(a.publicId);
+  return p && ((p.state >> 2) & 7) === 1;
+}), 'A\'s WALK action in a stamped state', 5000);
+const walkTick = a.ticks.filter(t => {
+  const p = t.players.get(a.publicId);
+  return p && ((p.state >> 2) & 7) === 1 && (p.state & 0x03) === 0;   // WALK only (bits 0-1 clear)
+}).at(-1);
+if (!walkTick)
+  throw new Error('A\'s stamped state carried the WALK action with another bit set (expected state byte 4)');
+const aWalkEntry = stateEntry(walkTick.buf, a.publicId);
+if (aWalkEntry[STATE_BYTES - 1] !== 0x04)
+  throw new Error('A\'s stamped state byte is not 4 (WALK action only)');
+const bWalk = b.ticks.some(t => bufEq(stateEntry(t.buf, a.publicId), aWalkEntry));
+const cWalk = c.ticks.some(t => bufEq(stateEntry(t.buf, a.publicId), aWalkEntry));
+if (!bWalk || !cWalk)
+  throw new Error('the WALK-action stamp of A was not byte-identical on B/C (B=' + bWalk + ' C=' + cWalk + ')');
+for (const cl of [b, c]) {
+  const st = walkTick.players.get(cl.publicId);
+  if (st && ((st.state >> 2) & 7) !== 0)
+    throw new Error(`${cl.tag}\'s stamp must not carry an action field (state byte ${st.state})`);
+}
+a.stateByte = 0;
+console.log('M43: A\'s WALK action stamp (state byte 0x04, bits 2-4) relayed byte-identical to B/C; B/C action bits stayed 0; frame size unchanged (21 B)');
+
 a.close(); b.close(); c.close();
-console.log('E2E_OK - M38: 3-tab player positions server-determined; stamps byte-identical; teleport rejected; M42 held-spear flag relays in the 21 B state; no client-authority fallback');
+console.log('E2E_OK - M38: 3-tab player positions server-determined; stamps byte-identical; teleport rejected; M42 held-spear flag relays in the 21 B state; M43 action field relays opaquely; no client-authority fallback');
 process.exit(0);

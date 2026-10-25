@@ -5731,6 +5731,109 @@ patched += `
     if (fires.length !== nf2 + 1) throw new Error('M42: the SP fire was not lit');
     if (wsInstances[0].sent.length !== sent2) throw new Error('M42: the SP actFire must not emit');
     mpApi = api;
+
+    /* 6.5 M43: the action enum (state byte bits 2-4) rides the type-26 state
+       byte, and the tick parse exposes p.action */
+    let actFlag = 0;
+    const api2 = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M43Tester',
+      inWater: () => false, held: () => mp.STATE_HELD_SPEAR, action: () => actFlag,
+    });
+    wsInstances[1].readyState = 1;
+    wsInstances[1].onopen();
+    const jsBuf2 = new Uint8Array(5);
+    new DataView(jsBuf2.buffer).setUint32(1, 121, false);
+    jsBuf2[0] = 8;
+    wsInstances[1].onmessage({ data: jsBuf2.buffer.slice(0) });
+    if (api2.publicId !== 121 || api2.connected() !== true)
+      throw new Error('M43: the join success was not parsed');
+    const lastState2 = () => {
+      const d = wsInstances[1].sent.at(-1);
+      return d instanceof Uint8Array ? d : new Uint8Array(d);
+    };
+    intervals[1].fn();
+    let st2 = lastState2();
+    if (st2[0] !== 26 || st2.byteLength !== 22) throw new Error('M43: the state frame is not [26][21B]');
+    if (st2[21] !== 2) throw new Error('M43: idle action + spear -> state byte 2 (got ' + st2[21] + ')');
+    actFlag = mp.STATE_ACTION_WALK;
+    intervals[1].fn();
+    if (lastState2()[21] !== 0x06) throw new Error('M43: WALK + spear -> 0x06 (got ' + lastState2()[21] + ')');
+    actFlag = mp.STATE_ACTION_RUN;
+    intervals[1].fn();
+    if (lastState2()[21] !== 0x0a) throw new Error('M43: RUN + spear -> 0x0a (got ' + lastState2()[21] + ')');
+    actFlag = mp.STATE_ACTION_ATTACK;
+    intervals[1].fn();
+    if (lastState2()[21] !== 0x0e) throw new Error('M43: ATTACK + spear -> 0x0e (got ' + lastState2()[21] + ')');
+    actFlag = mp.STATE_ACTION_INTERACT;
+    intervals[1].fn();
+    if (lastState2()[21] !== 0x12) throw new Error('M43: INTERACT + spear -> 0x12 (got ' + lastState2()[21] + ')');
+    actFlag = mp.STATE_ACTION_SLEEP;
+    intervals[1].fn();
+    if (lastState2()[21] !== 0x16) throw new Error('M43: SLEEP + spear -> 0x16 (got ' + lastState2()[21] + ')');
+    playersTick([
+      { id: 57, x: 0.0, y: 1.0, z: 0.0, yaw: 0.0, state: 0x0e },   // ATTACK + spear
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 0 },     // self
+    ]);
+    const r57 = api.remotes.get(57);
+    if (!r57 || r57.action !== mp.STATE_ACTION_ATTACK)
+      throw new Error('M43: the action field (bits 2-4) was not parsed (got ' + (r57 && r57.action) + ')');
+    if (r57.held !== mp.STATE_HELD_SPEAR) throw new Error('M43: the held bit must survive the action field');
+
+    /* 7 M43: pose layer ‒ procedural walk swing, one-shot attack/interact,
+       idle blend; the pose never desyncs the transform lerp */
+    playersTick([
+      { id: 57, x: 0.0, y: 1.0, z: 0.0, yaw: 0.0, state: 0x04 },   // WALK, no spear
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 0 },
+    ]);
+    mpRemotesFrame(1 / 60);
+    const av57 = mpAvatars.get(57);
+    if (!av57) throw new Error('M43: the walking avatar was not created');
+    if (av57.prevAction !== mp.STATE_ACTION_WALK) throw new Error('M43: first sight must adopt the action');
+    if (av57.legL.position.y !== 0.75 || av57.armR.position.y !== 1.65)
+      throw new Error('M43: the avatar limbs must be hip/shoulder pivot groups');
+    if (!av57.armR.children.includes(av57.spear)) throw new Error('M43: the held spear must be a child of the armR pivot');
+    if (Math.abs(av57.spear.position.y - (-0.63)) > 1e-6)
+      throw new Error('M43: the spear pivot offset must compensate the -0.33 mesh shift');
+    let maxLeg = 0;
+    for (let i = 0; i < 60; i++) {
+      api.remotes.get(57).x += 5.5 / 60;   /* the server stamp advances */
+      mpRemotesFrame(1 / 60);
+      maxLeg = Math.max(maxLeg, Math.abs(av57.legL.rotation.x));
+    }
+    if (maxLeg < 0.2)
+      throw new Error('M43: the walking avatar never swung its legs (max ' + maxLeg.toFixed(3) + ')');
+    if (Math.abs(av57.legL.rotation.x + av57.legR.rotation.x) > 0.05)
+      throw new Error('M43: the leg swing must be anti-phase');
+    playersTick([
+      { id: 57, x: api.remotes.get(57).x, y: 1.0, z: 0.0, yaw: 0.0, state: 0x0c },   // ATTACK
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 0 },
+    ]);
+    let maxArm = 0;
+    for (let i = 0; i < 25; i++) { mpRemotesFrame(1 / 60); maxArm = Math.max(maxArm, -av57.armR.rotation.x); }
+    if (maxArm < 0.3)
+      throw new Error('M43: the attack one-shot never swung the arm forward (max ' + maxArm.toFixed(3) + ')');
+    playersTick([
+      { id: 57, x: api.remotes.get(57).x, y: 1.0, z: 0.0, yaw: 0.0, state: 0x10 },   // INTERACT
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 0 },
+    ]);
+    let maxLean = 0;
+    for (let i = 0; i < 40; i++) { mpRemotesFrame(1 / 60); maxLean = Math.max(maxLean, av57.grp.rotation.x); }
+    if (maxLean < 0.1)
+      throw new Error('M43: the interact one-shot never leaned forward (max ' + maxLean.toFixed(3) + ')');
+    playersTick([
+      { id: 57, x: api.remotes.get(57).x, y: 1.0, z: 0.0, yaw: 0.0, state: 0 },   // IDLE
+      { id: 120, x: 9.0, y: 1.0, z: 1.0, yaw: 0.25, state: 0 },
+    ]);
+    for (let i = 0; i < 120; i++) mpRemotesFrame(1 / 60);
+    if (Math.abs(av57.legL.rotation.x) > 0.02)
+      throw new Error('M43: the idle blend did not settle the legs (' + av57.legL.rotation.x + ')');
+    if (Math.abs(av57.armR.rotation.x) > 0.02)
+      throw new Error('M43: the idle blend did not settle the arm (' + av57.armR.rotation.x + ')');
+    if (av57.grp.rotation.x !== 0) throw new Error('M43: the lean must return to 0');
+    if (av57.grp.position.x !== av57.x || av57.grp.position.y !== av57.y || av57.grp.position.z !== av57.z)
+      throw new Error('M43: the pose layer must not write avatar position');
+    if (av57.grp.rotation.y !== av57.yaw) throw new Error('M43: the pose layer must not write avatar yaw');
+    api2.close();
   } finally {
     if (api) api.close();
     mpApi = null;
