@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-25T14:57:46.943Z._
+_Auto-generated. Last updated 2026-10-25T16:11:33.371Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -43,4 +43,5 @@ _Auto-generated. Last updated 2026-10-25T14:57:46.943Z._
 - [multiplayer-deferred-serverbase](pages/multiplayer-deferred-serverbase.md) — category: decision | Decided: multiplayer is a **later milestone (M27‒M31 in the renumbered PLAN G11; previously "M7" before the M0‒M31 split)**, implemented as
 - [threejs-no-build-stack](pages/threejs-no-build-stack.md) — category: decision | Decided: the client follows the house pattern exactly — Three.js **r0.158** vendored in `lib/` (copy from .
 - [v3-server-authoritative](pages/v3-server-authoritative.md) — category: decision | tags: [multiplayer, serverbase, authority] | ## The decision (v3: server is world-authority)
+- [version-numbers](pages/version-numbers.md) — category: decision | ## Version numbers
 - [vivsurvivors-mp-relay](pages/vivsurvivors-mp-relay.md) — category: decision | tags: [multiplayer, protocol, serverbase] | ## Relay model (no server simulation)
