@@ -1,0 +1,12 @@
+{
+  "name": "vibesurvivors",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-file Three.js survival game. No build step, no dependencies: index.html + lib/ (vendored Three.js) are the game.",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "smoke": "node smoke/run.mjs",
+    "build": "echo 'vibesurvivors has no build step - index.html + lib/ are the game, nothing to build'"
+  }
+}
