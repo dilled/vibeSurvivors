@@ -3179,6 +3179,7 @@ function actUse() {
     crab.alive = false;
     crab.grp.visible = false;
     INV.crab++;
+    mpEmit(9, 64 + crabs.indexOf(crab), mpPayloadU8(0));   /* M45: the server owns the catch (no-op unless connected) */
     learn('crab', 'caught a crab \u2014 crabs scuttle away if you sprint');
     toast('\u{1F980} caught a crab');
     return;
@@ -3239,6 +3240,7 @@ function actStrike() {
   best.n = Math.max(0, best.n - take);
   best.mesh.count = best.n;
   INV.fishRaw += take;
+  mpEmit(9, schools.indexOf(best), mpPayloadU8(take));   /* M45: the server owns the take (no-op unless connected) */
   strikeCd = 1.2;
   spearSwing = 0.35;
   learn('fish', 'fish: schools drift in the shallows \u2014 X spears the nearest one');
@@ -4806,12 +4808,15 @@ const mpPayloadFire = (x, z) => {   /* M42: kind-8 fire payload (f32 x, f32 z) *
   new DataView(b.buffer).setFloat32(4, z, true);
   return b;
 };
-/* Edit kinds (v1 + M42): 0=palm (payload[0]=u8 cocos set), 1=plant
+/* Edit kinds (v1 + M42 + M45): 0=palm (payload[0]=u8 cocos set), 1=plant
  * (payload[0]=u8 chargesLeft set), 2=camp (payload = f32 x, f32 z, f32 rot
  * LE), 3=shelter 4=bed 5=fence 6=torch 7=raft (payload unused; positions =
  * camp + campOffsets(type), mesh built only if the slot is empty),
  * 8=fire (M42: payload = f32 x, f32 z; the G-key fire is a shared-world
- * edit - deduped by position so the EDIT_SYNC catch-up is a no-op). Set
+ * edit - deduped by position so the EDIT_SYNC catch-up is a no-op),
+ * 9=animal catch (M45: entityIndex = slot type*64+index, payload[0] = fish
+ * take, 0 for crabs; the SERVER owns the catch - the apply below mirrors the
+ * optimistic local catch, and a type-34 reject rolls it back). Set
  * semantics: replaying the same edit is a no-op, so the EDIT_SYNC catch-up
  * is safe.
  */
@@ -4820,7 +4825,22 @@ const MP_HELD_SPEAR = 1 << 1;   /* M42: held-item bit of the state byte (lib/mp.
 const MP_ACTION_IDLE = 0, MP_ACTION_WALK = 1, MP_ACTION_RUN = 2,
       MP_ACTION_ATTACK = 3, MP_ACTION_INTERACT = 4, MP_ACTION_SLEEP = 5;
 function mpApplyWorldEdit(kind, entityIndex, payload) {
-  if (!payload || kind > 8) return;
+  if (!payload || kind > 9) return;
+  if (kind === 9) {          /* M45: animal capture - entityIndex = slot (type*64+index),
+                              payload[0] = fish take (0 for crabs). Set semantics:
+                              a crab is one-way dead, a school's live count is
+                              re-adopted from the tick's state byte next frame. */
+    const slot = entityIndex | 0;
+    const type = slot >> 6, i = slot & 63;
+    if (type === 1) {          // crabs (slot 64+): hide it one-way
+      const c = crabs[i];
+      if (c && c.alive) { c.alive = false; c.grp.visible = false; }
+    } else if (type === 0) {   // fish schools (slot 0-4): mirror the take
+      const s = schools[i];
+      if (s) { const t = Math.max(1, payload[0] || 1); s.n = Math.max(0, s.n - t); s.mesh.count = s.n; }
+    }
+    return;
+  }
   if (kind === 0) {              /* palm: hide the dropped crowns (no falling items on replay) */
     const p = palms[entityIndex];
     if (!p || !cocosMesh) return;  /* M34: mp crowns unallocated until the world payload */
@@ -4878,6 +4898,26 @@ function mpApplyWorldEdit(kind, entityIndex, payload) {
         : type === 'bed'
         ? buildBedMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z))
         : buildRaftMesh(o.x, heightAt(o.x, o.z), o.z, Math.atan2(camp.x - o.x, camp.z - o.z));
+  }
+}
+
+/* M45: roll back an optimistic kind-9 animal catch the server just rejected
+ * (another tab beat you to the crab, or the school had no fish). The sender
+ * applied the catch locally first (it's how the game feels instant); a type-34
+ * reject undoes exactly that. Named + payload-driven so the smoke can test it.
+ * Non-kind-9 edits have no local mutation to roll back (set semantics). */
+function mpCatchRollback(kind, eidx, payload) {
+  if (kind !== 9 || !payload) return;
+  const slot = eidx | 0, type = slot >> 6, i = slot & 63;
+  if (type === 1) {              // the crab is still alive - un-catch it
+    const c = crabs[i];
+    if (c) { c.alive = true; c.grp.visible = true; }
+    INV.crab = Math.max(0, INV.crab - 1);
+  } else if (type === 0) {       // the fish came back to the school
+    const t = Math.max(1, payload[0] || 1);
+    const s = schools[i];
+    if (s) { s.n = Math.min(s.n0, s.n + t); s.mesh.count = s.n; }
+    INV.fishRaw = Math.max(0, INV.fishRaw - t);
   }
 }
 
@@ -4956,7 +4996,7 @@ function mpAnimalsFrame(dt) {
     g.position.y += (a.y - g.position.y) * k;   /* M36: altitude/depth */
     const dy = a.yaw - g.rotation.y;
     g.rotation.y += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;
-    if (a.dead) g.visible = false;
+    if (a.dead) { g.visible = false; e.alive = false; }   /* M45: adopt the dead bit one-way (a remotely caught crab is uncatchable locally too) */
   }
 }
 /* M36: the mp presentation pass (runs only on connected tabs, right after
@@ -5141,10 +5181,13 @@ function mpBuildWorld(w, force) {
          relayed to anyone). The tab already applied it locally; because the
          server store is a bit-exact port, a legitimate edit is always
          accepted, so a reject means a genuinely invalid mutation - surface
-         it loudly (M39 scope: no local rollback / resync yet). */
-      onEditReject: (pid, eidx, kind, reason) => {
+         it loudly (M39 scope: no local rollback / resync yet). M45: kind-9
+         catches ROLL BACK their optimistic local application (the other tab
+         beat you to the crab / the school had no fish). */
+      onEditReject: (pid, eidx, kind, payload, reason) => {
         console.warn(`[MP] edit kind=${kind} entity=${eidx} rejected by server: ${reason}`);
         toast('the island says no \u2014 ' + reason);
+        mpCatchRollback(kind, eidx, payload);   /* M45: undo the optimistic catch */
       },
       onTime: (gm) => {
         /* M37: EVERY tab adopts the server clock (bit4 is the server's own

@@ -5442,7 +5442,7 @@ patched += `
     const rejections = [];
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M39Tester', inWater: () => false,
-      onEditReject: (pid, eidx, kind, reason) => rejections.push({ pid, eidx, kind, reason }),
+      onEditReject: (pid, eidx, kind, payload, reason) => rejections.push({ pid, eidx, kind, payload, reason }),
     });
     mpApi = api;
     wsInstances[0].readyState = 1;
@@ -5891,6 +5891,180 @@ patched += `
     while (fires.length > saveFires) { const f = fires.pop(); scene.remove(f.grp); }
     for (const av of mpAvatars.values()) scene.remove(av.grp);
     mpAvatars.clear();
+  }
+}
+
+/* ---- M45: server owns ANIMAL CAPTURE (kind-9 edits) ---- */
+{
+  if (mpApi !== null) throw new Error('M45: mpApi leaked in from the M42 block');
+  dead = false;
+
+  /* 1. apply path (mpApplyWorldEdit kind 9) - no connection needed.
+     Crab (slot 64+): one-way dead. School (slot 0-4): live count drops. */
+  const liveCrab = crabs.find((c) => c.alive);
+  if (liveCrab) {
+    const ci = crabs.indexOf(liveCrab);
+    mpApplyWorldEdit(9, 64 + ci, mpPayloadU8(0));
+    if (liveCrab.alive !== false || liveCrab.grp.visible !== false)
+      throw new Error('M45: the relayed crab catch did not kill/hide the crab');
+    mpApplyWorldEdit(9, 64 + ci, mpPayloadU8(0));   // idempotent re-apply
+    if (liveCrab.alive !== false) throw new Error('M45: the crab catch apply must be idempotent');
+  }
+  const liveSchool = schools.find((s) => s.n > 1);
+  if (liveSchool) {
+    const si = schools.indexOf(liveSchool);
+    const nBefore = liveSchool.n;
+    mpApplyWorldEdit(9, si, mpPayloadU8(2));
+    if (liveSchool.n !== Math.max(0, nBefore - 2))
+      throw new Error('M45: the relayed fish take did not drop the school count (' + nBefore + '->' + liveSchool.n + ')');
+    if (liveSchool.mesh.count !== liveSchool.n) throw new Error('M45: the school instance count must follow n');
+  }
+  /* a non-catchable slot (type 2 = tiger) is ignored */
+  const nf = fires.length;
+  mpApplyWorldEdit(9, 128, mpPayloadU8(0));
+  if (fires.length !== nf) throw new Error('M45: a non-catchable slot must be a no-op');
+
+  /* 2. + 3. + 4. connected: actUse/actStrike emit kind-9, and a type-34
+     reject rolls the optimistic catch back. */
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  let api = null;
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const m45Rejects = [];
+    api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M45Tester',
+      inWater: () => false, held: () => 0,
+      /* mirror the page's onEditReject: surface the reason + roll the catch back */
+      onEditReject: (pid, eidx, kind, payload, reason) => {
+        m45Rejects.push({ pid, eidx, kind, payload, reason });
+        mpCatchRollback(kind, eidx, payload);
+      },
+    });
+    mpApi = api;
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 200, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 200 || api.connected() !== true) throw new Error('M45: the join success was not parsed');
+
+    const kind9Frames = () => wsInstances[0].sent
+      .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)))
+      .filter((d) => d[0] === 28 && d[9] === 9);
+
+    /* 2. actUse catches a crab -> one kind-9 frame, entityIndex = 64+idx.
+       A nearby palm/coconut may resolve first (their branches run before the
+       crab's), so loop actUse until the kind-9 frame lands. */
+    /* standable spot: within 1.4 of the crab (so < 1.5 catch radius), off the
+       drink band (h >= 0.26), clear of every OTHER live crab by > 1.5 (so the
+       catch targets exactly this crab), and clear of every palm by > 3.5 (the
+       palm branch of actUse ALWAYS returns first, so a nearby palm would make
+       the crab branch unreachable). Search live crabs for one that has such a
+       spot. */
+    const spotNear = (c) => {
+      for (let k = 0; k < 16; k++) {
+        const a2 = (k * Math.PI) / 8;
+        const tx = c.x + Math.cos(a2) * 1.4, tz = c.z + Math.sin(a2) * 1.4;
+        if (heightAt(tx, tz) < 0.26) continue;
+        if (crabs.some((o) => o !== c && o.alive && Math.hypot(o.x - tx, o.z - tz) < 1.5)) continue;
+        if (palms.some((p) => Math.hypot(p.x - tx, p.z - tz) < 3.5)) continue;
+        if (fires.some((f) => Math.hypot(f.x - tx, f.z - tz) < 2.5)) continue;
+        const raft = camp && camp.structures.raft;
+        if (raft && Math.hypot(raft.position.x - tx, raft.position.z - tz) < 2.5) continue;
+        return { tx, tz };
+      }
+      return null;
+    };
+    const catchTarget = crabs.filter((c) => c.alive).map((c) => ({ c, s: spotNear(c) }))
+      .find((o) => o.s);
+    if (!catchTarget) throw new Error('M45: no live crab with a standable, unambiguous spot');
+    const { c: targetCrab, s: spot } = catchTarget;
+    const ci = crabs.indexOf(targetCrab);
+    let px = spot.tx, pz = spot.tz;
+    rig.position.set(px, Math.max(heightAt(px, pz), WATER - 0.25), pz);
+    const before = kind9Frames().length;
+    for (let i = 0; i < 30 && kind9Frames().length === before; i++) actUse();
+    if (kind9Frames().length < before + 1) throw new Error('M45: actUse did not emit a kind-9 crab catch');
+    const cf = kind9Frames().at(-1);
+    const cdv = new DataView(cf.buffer, cf.byteOffset, cf.byteLength);
+    if (cdv.getUint32(5, true) !== 64 + ci)
+      throw new Error('M45: the crab catch edit must carry slot 64+' + ci + ' (got ' + cdv.getUint32(5, true) + ')');
+    if (targetCrab.alive) throw new Error('M45: the local crab was not caught');
+
+    /* 3. actStrike spears a school -> one kind-9 frame, entityIndex = idx */
+    if (!spear) actCraftSpear();
+    strikeCd = 0;
+    /* the player stands on the school's anchor (d = -1.2, the minimum), so
+       pick one whose anchor is unique among live schools (no tie). */
+    const school45 = schools.find((s) => s.n > 0 &&
+      !schools.some((o) => o !== s && o.n > 0 &&
+        Math.hypot(o.x - s.x, o.z - s.z) < 0.01));
+    if (school45) {
+      const si = schools.indexOf(school45);
+      rig.position.set(school45.x, Math.max(heightAt(school45.x, school45.z), WATER - 0.25), school45.z);
+      const before = kind9Frames().length;
+      actStrike();
+      const frames = kind9Frames();
+      if (frames.length < before + 1) throw new Error('M45: actStrike did not emit a kind-9 fish take');
+      const f = frames.at(-1);
+      const dv = new DataView(f.buffer, f.byteOffset, f.byteLength);
+      if (dv.getUint32(5, true) !== si)
+        throw new Error('M45: the fish take edit must carry slot ' + si + ' (got ' + dv.getUint32(5, true) + ')');
+      if (f[11] < 1) throw new Error('M45: the fish take edit must carry a take count in payload[0]');
+    }
+
+    /* 4. a type-34 reject rolls the optimistic catch back */
+    const reason = 'the crab is already gone';
+    const rbuf = new Uint8Array(1 + 23 + 2 + reason.length);
+    rbuf[0] = 34;
+    const rdv = new DataView(rbuf.buffer);
+    rdv.setUint32(1, 200, true);            // publicId
+    rdv.setUint32(5, 64, true);             // entityIndex = crab slot 64
+    rbuf[9] = 9; rbuf[10] = 0;              // kind 9, action 0
+    rdv.setUint16(1 + 23, reason.length, true);
+    rbuf.set(new TextEncoder().encode(reason), 1 + 23 + 2);
+    const rc = crabs[0];
+    rc.alive = false; rc.grp.visible = false;
+    const crabInv = INV.crab;
+    wsInstances[0].onmessage({ data: rbuf.buffer.slice(0) });
+    if (rc.alive !== true || rc.grp.visible !== true) throw new Error('M45: the reject did not un-kill the crab');
+    if (INV.crab !== Math.max(0, crabInv - 1)) throw new Error('M45: the reject did not roll back the crab inventory');
+
+    /* a fish-take reject restores the school count + fishRaw */
+    const fbuf = new Uint8Array(1 + 23 + 2 + reason.length);
+    fbuf[0] = 34;
+    const fdv = new DataView(fbuf.buffer);
+    fdv.setUint32(1, 200, true);
+    fdv.setUint32(5, 0, true);              // entityIndex = school slot 0
+    fbuf[9] = 9; fbuf[10] = 0; fbuf[11] = 2; // take 2
+    fdv.setUint16(1 + 23, reason.length, true);
+    fbuf.set(new TextEncoder().encode(reason), 1 + 23 + 2);
+    const s0 = schools[0];
+    const nBefore = s0.n, frBefore = INV.fishRaw;
+    wsInstances[0].onmessage({ data: fbuf.buffer.slice(0) });
+    if (s0.n !== Math.min(s0.n0, nBefore + 2)) throw new Error('M45: the fish reject did not restore the school count');
+    if (INV.fishRaw !== Math.max(0, frBefore - 2)) throw new Error('M45: the fish reject did not roll back fishRaw');
+  } finally {
+    if (api) api.close();
+    mpApi = null;
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
   }
 }
 `;
