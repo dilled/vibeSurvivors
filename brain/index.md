@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-25T13:26:21.608Z._
+_Auto-generated. Last updated 2026-10-25T13:45:28.327Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -32,6 +32,7 @@ _Auto-generated. Last updated 2026-10-25T13:26:21.608Z._
 - [m39-server-edit-validation](pages/m39-server-edit-validation.md) — category: decision | tags: [m39, multiplayer, server-authority, edits, world-store] | What was decided: from M39 the server is the **single source of truth for world
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
 - [m40-zero-client-authority](pages/m40-zero-client-authority.md) — category: decision | M40 removed ALL client authority and made the server world survive a restart.
+- [m41-v3-integration-pass](pages/m41-v3-integration-pass.md) — category: decision | tags: [multiplayer, serverbase, verification, e2e] | ## What M41 established
 - [m5-tiger](pages/m5-tiger.md) — category: decision | tags: [tiger, night, predator, threat] | ## What shipped (M5 — first tiger)
 - [m6-night-1-encounter](pages/m6-night-1-encounter.md) — category: decision | tags: [tiger, gulls, crabs, night, encounter] | ## What shipped (M6 ‒ night-1 encounter)
 - [m7-vegetation-framework](pages/m7-vegetation-framework.md) — category: decision | tags: [vegetation, plants, foraging, determinism, rng, framework] | ## What shipped (M7 ‒ vegetation framework)
