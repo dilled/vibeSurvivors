@@ -51,7 +51,7 @@ const EXPECTED_TYPE = (slot) =>
 function animalsSection(buf) {
   const flags = buf[1];
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let off = 6;
+  let off = 2;   // M40: sections right after flags
   if (flags & TICK_PLAYERS) {
     if (off + 8 > buf.length) return null;
     const count = dv.getUint32(off + 4, true);

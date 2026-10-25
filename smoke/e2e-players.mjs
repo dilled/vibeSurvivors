@@ -48,7 +48,7 @@ function parsePlayers(buf) {
   const out = new Map();
   if (!(flags & TICK_PLAYERS)) return out;
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let off = 6; // type(1) + flags(1) + authority(4)
+  let off = 2; // M40: type(1) + flags(1) - sections right after flags
   if (off + 8 > buf.length) throw new Error('players section: header overflows');
   const count = dv.getUint32(off + 4, true);
   off += 8; // tickId + count
@@ -72,7 +72,7 @@ function parsePlayers(buf) {
 function timeWeatherTail(buf) {
   const flags = buf[1];
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let off = 6;
+  let off = 2;   // M40: sections right after flags
   if (flags & TICK_PLAYERS) {
     if (off + 8 > buf.length) return null;
     const count = dv.getUint32(off + 4, true);

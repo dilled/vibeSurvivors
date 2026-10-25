@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, protocol, serverbase]
 created: "2026-10-18T05:02:17"
-updated: "2026-10-24T19:42:18"
+updated: "2026-10-25T13:17:39"
 ---
 
 <!-- compiled_truth -->
@@ -111,4 +111,9 @@ M28 shipped: presence rendering (remote avatars + name tags from `remotes`) ‒ 
   kind: decision
   summary: "M35 recorded: server simulates the first 28-animal batch itself (snapshot on tick bit2 for all tabs; M30 relay retired server-side; type-29 upload path client-side until M40); client snapshot-overwrite pass now adopted on every tab incl. authority"
   source: "brain sync pass: commit 0b3206e (M35, range 1b2913a..0b3206e)"
+  affects: [vivsurvivors-mp-relay]
+
+- time: 2026-10-25T13:17:39
+  kind: reversal
+  summary: "M40: the v1/v2 relay is fully removed on the client side. Tick head shrunk to [27][flags] (sections from byte 2); types 29/32 retired; all client authority (world lock, authorityId/isAuthority, animal+clock uploads) deleted; any connected tab may edit. See [[m40-zero-client-authority]]."
   affects: [vivsurvivors-mp-relay]

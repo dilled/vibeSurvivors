@@ -7,7 +7,8 @@
 //       only) and NEVER relay them: a spent-palm shake, a wrong-payload shake,
 //       a harvest of a depleted plant, and a structure build >10u from the
 //       camp are all refused against the server's own world store;
-//   (c) drop follower edits outright (M29 authority gate, no type-34);
+//   (c) accept a "follower" tab's edit and relay it (M40: no authority
+//       gate - any connected tab may edit; the server validates);
 //   (d) replay the ACCEPTED edits (and only them) as the type-30 EDIT_SYNC
 //       catch-up for a late-joining 4th tab.
 // Data-level convergence, the M27-M38 precedent (no chrome).
@@ -47,7 +48,7 @@ const SPAWN = { x: 143.382, z: 147.632 };
 function parseEdits(buf) {
   const flags = buf[1];
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let off = 6;   // type(1) + flags(1) + authority(4)
+  let off = 2;   // M40: type(1) + flags(1) - sections right after flags
   if (flags & TICK_PLAYERS) {
     if (off + 8 > buf.length) return null;
     const count = dv.getUint32(off + 4, true);
@@ -206,10 +207,10 @@ class Client {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function main() {
-  const A = new Client('A', CAMP.x, CAMP.z);      // authority: at the camp spot
-  const B = new Client('B', SPAWN.x, SPAWN.z);    // follower 1
-  const C = new Client('C', SPAWN.x, SPAWN.z);    // follower 2
-  const allClients = [A, B, C];   // closed in finally so a failed run leaks no authority
+  const A = new Client('A', CAMP.x, CAMP.z);      // at the camp spot
+  const B = new Client('B', SPAWN.x, SPAWN.z);    // tab 2 (ex-follower; M40: any tab edits)
+  const C = new Client('C', SPAWN.x, SPAWN.z);    // tab 3
+  const allClients = [A, B, C];   // closed in finally so a failed run leaks no open sockets
   await Promise.all([A.connect(), B.connect(), C.connect()]);
   await Promise.all([A, B, C].map((c) =>
     c.waitFor(() => c.publicId !== null || c.joinError !== null, `${c.tag} join result`)));
@@ -334,14 +335,12 @@ async function main() {
   // 6. a spent-palm wind drop can only come from a storm; out of scope here,
   //    but the store's cocos>0 guard keeps the two sides in sync (gtest).
 
-  /* ---- (c) follower edits are dropped outright (M29) ---- */
-  const followerCamp = editBody(B.publicId, 2, 0, campPayload());
-  B.sendEdit(2, 0, campPayload());
-  await sleep(400);
-  if (relayTabs.some((t) => t.recentEdits(6).some((e) => bufEq(e, followerCamp))))
-    throw new Error('a follower edit was relayed - the M29 authority gate is gone');
-  if (B.rejects.length > 0)
-    throw new Error('a follower edit got a type-34 - non-authority edits are dropped, not rejected');
+  /* ---- (c) M40: no authority gate - tab B (the ex-follower) edits and
+     the server accepts + relays it exactly like A's (palm 1: 2 -> 1) ---- */
+  const bPalm = editBody(B.publicId, 0, 1, [1]);
+  B.sendEdit(0, 1, [1]);
+  await expectRelay(B, 'B palm shake', bPalm, 'B palm-1 shake (2 -> 1)');
+  accepted.push(bPalm);
 
   /* ---- (d) the late joiner replays the ACCEPTED history only ---- */
   const D = new Client('D', SPAWN.x, SPAWN.z);
@@ -361,7 +360,7 @@ async function main() {
 
   console.log(`${accepted.length} valid edits relayed byte-identical across all three tabs`);
   console.log('5 invalid edits rejected with explicit reasons (palm dry / wrong payload / plant depleted / duplicate camp / build 12.5u from camp) - none relayed');
-  console.log('follower edit dropped by the M29 authority gate (no relay, no type-34)');
+  console.log('tab B (ex-follower) edit accepted + relayed - no authority gate (M40; the server validates)');
   console.log(`late joiner D replayed all ${accepted.length} accepted edits byte-identically (type-30)`);
   console.log('E2E_OK - M39: edits validated server-side against the world store; invalid edits rejected + never relayed; valid edits converge identically');
   } finally {

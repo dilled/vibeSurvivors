@@ -3133,7 +3133,6 @@ function actUse() {
   /* 4. shake a palm: drop a coconut, or gather wood from a spent palm (M20) */
   const p = palms.find((p) => Math.hypot(p.x - x, p.z - z) < 3.5);
   if (p) {
-    if (mpWorldLockedGuard()) return;   /* M29: world mutations belong to the authority */
     if (p.cocos > 0) {
       dropCoconut(p);   /* M11: shared with the storm wind */
       mpEmit(0, p.idx, mpPayloadU8(p.cocos));   /* M29: relay the new coco count */
@@ -3178,7 +3177,6 @@ function actUse() {
     if (d < phd) { phd = d; ph = p; }
   }
   if (ph) {
-    if (mpWorldLockedGuard()) return;   /* M29: harvests are authority-only */
     const d = PLANT_TYPES[ph.type].drop;
     INV[d.invKey] = (INV[d.invKey] || 0) + d.n;
     if (PLANT_TYPES[ph.type].learn) learn(ph.type, PLANT_TYPES[ph.type].learn);
@@ -3239,7 +3237,6 @@ function actFire() {
 }
 function actCamp() {
   if (dead) return;
-  if (mpWorldLockedGuard()) return;   /* M29 */
   if (camp) { toast('\u26FA\uFE0F your camp is already established'); return; }
   const { x, z } = playerPos();
   const chk = campCheck(x, z);
@@ -3253,7 +3250,6 @@ function actCamp() {
 }
 function actShelter() {
   if (dead) return;
-  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.shelter) { toast('the shelter is already built'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3271,7 +3267,6 @@ function actShelter() {
 }
 function actBed() {
   if (dead) return;
-  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.bed) { toast('the bed is already made'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3289,7 +3284,6 @@ function actBed() {
 }
 function actFence() {
   if (dead) return;
-  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.fence) { toast('the fence is already built'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3305,7 +3299,6 @@ function actFence() {
 }
 function actTorch() {
   if (dead) return;
-  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.torch) { toast('the camp torch is already standing'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -3372,7 +3365,6 @@ function actCraftRope() {
 }
 function actBuildRaft() {
   if (dead) return;
-  if (mpWorldLockedGuard()) return;   /* M29 */
   if (!camp) { toast('establish a camp first \u2014 H'); return; }
   if (camp.structures.raft) { toast('the raft is already built'); return; }
   if (Math.hypot(rig.position.x - camp.x, rig.position.z - camp.z) > 10) {
@@ -4727,7 +4719,6 @@ function mpSelfFrame(dt) {
 let mpTimeAdopt = 0;     /* M37: pending server clock (frame() consumes it; every tab adopts) */
 let mpWeatherEvKey = null;    /* M37: identity of the server storm list being fired */
 let mpWeatherEvDone = new Set(); /* M37: per-index done set for that list */
-let mpLockToastT = 0;    /* cooldown for the world-locked toast */
 const mpPayloadU8 = (v) => { const b = new Uint8Array(12); b[0] = v & 0xff; return b; };
 const mpPayloadCamp = (x, z, rot) => {
   const b = new Uint8Array(12);
@@ -4793,26 +4784,12 @@ function mpApplyWorldEdit(kind, entityIndex, payload) {
   }
 }
 
-/* Upload one world edit. No-op unless connected AND this tab is the authority.
- * (The server enforces the same rule; followers are locked out below too.) */
+/* Upload one world edit. No-op unless connected. M40: the server is fully
+ * authoritative - any connected tab may edit, and the server validates every
+ * edit (rejects land in onEditReject). */
 function mpEmit(kind, entityIndex, payload) {
   if (!mpApi || !mpApi.connected()) return;
-  if (!mpApi.authorityId || mpApi.authorityId !== mpApi.publicId) return;
   mpApi.sendEdit(kind, entityIndex, payload);
-}
-
-/* This tab is a FOLLOWER: world mutations are locked to the authority. */
-function mpWorldLocked() {
-  return !!(mpApi && mpApi.connected() && mpApi.authorityId
-    && mpApi.authorityId !== mpApi.publicId);
-}
-function mpWorldLockedGuard() {
-  if (!mpWorldLocked()) return false;
-  if (runT > mpLockToastT) {
-    toast('shared island \u2014 the host drives the world for everyone');
-    mpLockToastT = runT + 2;
-  }
-  return true;
 }
 
 /* --------------------- multiplayer animals (M30, superseded by M35/M36) ------
@@ -4824,7 +4801,8 @@ function mpWorldLockedGuard() {
  * transforms (x/z/yaw/y lerp, fish n from the state byte) and
  * mpAnimalsPresent keeps the puppets alive (fish instances, grounded y,
  * legs/wings). The M30 upload side (authority relaying its own 51-entry
- * roster 30 Hz) stays in place until M40 retires it. Slot =
+ * roster 30 Hz) was RETIRED by M40: the roster now arrives exclusively from
+ * the server's own simulation (tick bit2). Slot =
  * type * 64 + populationIndex (type = animal registry index): same world
  * seed => same roster on every client, so the mapping matches without
  * transmission. Inert without ?mp= (mpApi stays null), zero rng.
@@ -4841,27 +4819,6 @@ function mpAnimalRoster() {
   }
   mpAnimalRosterCache = roster;
   return roster;
-}
-/* Authority upload getter (wired into the ?mp= block): the current mesh
- * transform of every individual is the single source of truth (each step()
- * synced grp from the data fields this frame). Schools relay only their
- * anchor (x, z); y/yaw are unused for them, dead = no fish left. */
-function mpCollectAnimals() {
-  const out = [];
-  for (const r of mpAnimalRoster()) {
-    const e = r.pop[r.i];
-    if (!e) continue;
-    if (r.isSchool) {
-      out.push({ slot: r.slot, type: r.type, x: e.x, y: 0, z: e.z, yaw: 0,
-        dead: e.n <= 0 });
-    } else {
-      if (!e.grp) continue;
-      out.push({ slot: r.slot, type: r.type, x: e.grp.position.x,
-        y: e.grp.position.y, z: e.grp.position.z, yaw: e.grp.rotation.y,
-        dead: r.id === 'crab' ? !e.alive : false });
-    }
-  }
-  return out;
 }
 /* Snapshot apply (called once per frame after both animal phases): the
  * SERVER's animal snapshot (M35, extended by M36 to ALL 51 animals) overwrites
@@ -5062,8 +5019,8 @@ function mpBuildWorld(w, force) {
       inWater: () => heightAt(rig.position.x, rig.position.z) < SHARK_IN_WATER,
       /* M34: build the vegetation world from the server's placement block */
       onWorld: (w) => mpBuildWorld(w),
-      /* M29: shared deterministic world state */
-      gameMin: () => gameMin,
+      /* M29: shared deterministic world state (M40: state uplink only -
+         the clock/animals are server-owned and arrive in the tick) */
       onEdit: (pid, eidx, kind, action, payload) => {
         if (pid === mpApi.publicId) return;   /* own edit: already applied locally */
         mpApplyWorldEdit(kind, eidx, payload);
@@ -5088,9 +5045,6 @@ function mpBuildWorld(w, force) {
         if (!Number.isFinite(gm)) return;
         mpTimeAdopt = gm;
       },
-      /* M30: the authority uploads its animal snapshot; followers apply
-         it in mpAnimalsFrame (tick bit2 -> mpApi.animals) */
-      animals: mpCollectAnimals,
     });
   }
 }

@@ -3261,7 +3261,7 @@ patched += `
     const rigStub = { position: { x: 1.5, y: 2.25, z: -3.5 }, rotation: { y: 0.75 } };
     const api = mp.attachMultiplayer({
       rig: rigStub, url: '127.0.0.1:3003', seed: 1337, displayName: 'SmokeTester',
-      inWater: () => true, onTick: (tickId, rem, auth) => tickLog.push({ tickId, auth, n: rem.size }),
+      inWater: () => true, onTick: (tickId, rem) => tickLog.push({ tickId, n: rem.size }),
     });
 
     /* 2. connect: bare host:port gets wss://, the 30 Hz send loop starts */
@@ -3307,12 +3307,9 @@ patched += `
 
     /* 6. tick parse: players + names, with the reserved edits/animals sections
    *    present and correctly skipped (flags 0x0D = players|edits|names) */
-    const buildTick = (flags, auth, tickId, players, editCount, animalCount, names) => {
+    const buildTick = (flags, tickId, players, editCount, animalCount, names) => {
       const parts = [new Uint8Array([27, flags])];
       let buf;
-      const head = new DataView(new ArrayBuffer(4));
-      head.setUint32(0, auth, true);
-      parts.push(new Uint8Array(head.buffer));
       const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
       if (flags & 1) {
         parts.push(w32(tickId), w32(players.length));
@@ -3339,14 +3336,13 @@ patched += `
       for (const p of parts) { buf.set(p, off); off += p.length; }
       return buf;
     };
-    const t1 = buildTick(0x0D, 7, 42,
+    const t1 = buildTick(0x0D, 42,
       [{ id: 7, x: 1.5, y: 2.25, z: -3.5, yaw: 0.75, state: 1 },
        { id: 9, x: 5.5, y: 0, z: -5.5, yaw: 1, state: 0 }],
       2, 0, [{ id: 9, name: 'Bob' }]);
     wsInstances[0].onmessage({ data: t1.buffer.slice(0) });
-    if (tickLog.length !== 1 || tickLog[0].tickId !== 42 || tickLog[0].auth !== 7)
-      throw new Error('M27: onTick did not fire with tickId/authority');
-    if (api.authorityId !== 7) throw new Error('M27: authorityId not stored');
+    if (tickLog.length !== 1 || tickLog[0].tickId !== 42)
+      throw new Error('M27: onTick did not fire with tickId');
     if (api.remotes.size !== 1 || api.remotes.has(7))
       throw new Error('M27: remotes must hold only the remote (self excluded)');
     const r = api.remotes.get(9);
@@ -3354,7 +3350,7 @@ patched += `
       throw new Error('M27: remote parsed wrong: ' + JSON.stringify(r));
 
     /* 7. animals section present too (flags 0x0F) and still parsed right */
-    const t2 = buildTick(0x0F, 7, 43,
+    const t2 = buildTick(0x0F, 43,
       [{ id: 9, x: 6, y: 0, z: -5, yaw: 1.1, state: 1 }],
       0, 3, []);
     wsInstances[0].onmessage({ data: t2.buffer.slice(0) });
@@ -3365,7 +3361,7 @@ patched += `
       throw new Error('M27: updated remote parsed wrong: ' + JSON.stringify(r2));
 
     /* 8. a remote that leaves the session is dropped from the map */
-    const t3 = buildTick(0x01, 0, 44, [{ id: 7, x: 1.5, y: 2.25, z: -3.5, yaw: 0.75, state: 0 }], 0, 0, []);
+    const t3 = buildTick(0x01, 44, [{ id: 7, x: 1.5, y: 2.25, z: -3.5, yaw: 0.75, state: 0 }], 0, 0, []);
     wsInstances[0].onmessage({ data: t3.buffer.slice(0) });
     if (api.remotes.size !== 0) throw new Error('M27: a departed remote was not dropped');
 
@@ -3435,11 +3431,8 @@ patched += `
     if (api.connected() !== true) throw new Error('M28: connected() must be true after join');
 
     /* 3. first sight of a remote snaps (never lerps from the origin) */
-    const buildTick = (flags, auth, tickId, players, editCount, animalCount, names) => {
+    const buildTick = (flags, tickId, players, editCount, animalCount, names) => {
       const parts = [new Uint8Array([27, flags])];
-      const head = new DataView(new ArrayBuffer(4));
-      head.setUint32(0, auth, true);
-      parts.push(new Uint8Array(head.buffer));
       const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
       if (flags & 1) {
         parts.push(w32(tickId), w32(players.length));
@@ -3464,7 +3457,7 @@ patched += `
       for (const p of parts) { buf.set(p, off); off += p.length; }
       return buf;
     };
-    const t1 = buildTick(0x01, 50, 1,
+    const t1 = buildTick(0x01, 1,
       [{ id: 50, x: 0, y: 0, z: 0, yaw: 0, state: 0 },
        { id: 60, x: 5, y: 1.2, z: -6, yaw: 1.3, state: 0 }], 0, 0, []);
     wsInstances[0].onmessage({ data: t1.buffer.slice(0) });
@@ -3484,7 +3477,7 @@ patched += `
 
     /* 4. lerp toward new tick values (x converges, yaw takes the short arc),
      *    and the name arrives in the names section after the players section */
-    const t2 = buildTick(0x0D, 50, 2, [{ id: 60, x: 6, y: 1.2, z: -6, yaw: 4.6, state: 0 }], 0, 0, [{ id: 60, name: 'Bob' }]);
+    const t2 = buildTick(0x0D, 2, [{ id: 60, x: 6, y: 1.2, z: -6, yaw: 4.6, state: 0 }], 0, 0, [{ id: 60, name: 'Bob' }]);
     wsInstances[0].onmessage({ data: t2.buffer.slice(0) });
     for (let i = 0; i < 60; i++) mpRemotesFrame(1 / 60);
     if (av.x >= 6 || av.x <= 5) throw new Error('M28: x should converge toward 6, got ' + av.x);
@@ -3495,21 +3488,21 @@ patched += `
     if (av.tex.needsUpdate !== true) throw new Error('M28: name tag texture not flagged for update');
 
     /* 5. a >30 u jump (rejoin) snaps instead of lerping across the island */
-    const t3 = buildTick(0x01, 50, 3, [{ id: 60, x: 60, y: 0, z: -60, yaw: 0, state: 0 }], 0, 0, []);
+    const t3 = buildTick(0x01, 3, [{ id: 60, x: 60, y: 0, z: -60, yaw: 0, state: 0 }], 0, 0, []);
     wsInstances[0].onmessage({ data: t3.buffer.slice(0) });
     mpRemotesFrame(1 / 60);
     if (Math.abs(av.x - 60) > 1e-6 || Math.abs(av.z + 60) > 1e-6)
       throw new Error('M28: a >30 u jump must snap (rejoin), not lerp');
 
     /* 6. a remote that leaves the session (absent from a tick) is removed */
-    const t4 = buildTick(0x01, 50, 4, [{ id: 50, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], 0, 0, []);
+    const t4 = buildTick(0x01, 4, [{ id: 50, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], 0, 0, []);
     wsInstances[0].onmessage({ data: t4.buffer.slice(0) });
     mpRemotesFrame(1 / 60);
     if (mpAvatars.size !== 0) throw new Error('M28: a departed remote was not removed');
     if (scene.children.includes(av.grp)) throw new Error('M28: the departed avatar was left in the scene');
 
     /* 7. a disconnect hides avatars and connected() goes false */
-    const t5 = buildTick(0x01, 50, 5, [{ id: 60, x: 60, y: 0, z: -60, yaw: 0, state: 0 }], 0, 0, []);
+    const t5 = buildTick(0x01, 5, [{ id: 60, x: 60, y: 0, z: -60, yaw: 0, state: 0 }], 0, 0, []);
     wsInstances[0].onmessage({ data: t5.buffer.slice(0) });
     mpRemotesFrame(1 / 60);
     wsInstances[0].onclose();   /* rejoin backoff timer armed via the fake setTimeout */
@@ -3534,7 +3527,6 @@ patched += `
 {
   /* 1. single-player invariants: without mpApi nothing fires */
   if (mpApi !== null) throw new Error('M29: mpApi leaked in from the M28 block');
-  if (mpWorldLocked()) throw new Error('M29: mpWorldLocked must be false without mpApi');
   mpEmit(0, 0, mpPayloadU8(1));   /* must be a silent no-op (no ws attached) */
   mpApplyWorldEdit(99, 0, new Uint8Array(12));   /* unknown kind: ignored */
 
@@ -3577,7 +3569,6 @@ patched += `
     /* the page's ?mp= block wires these hooks; mirror them exactly */
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M29Tester', inWater: () => false,
-      gameMin: () => gameMin,
       onEdit: (pid, eidx, kind, action, payload) => {
         if (pid === api.publicId) return;
         mpApplyWorldEdit(kind, eidx, payload);
@@ -3588,7 +3579,6 @@ patched += `
       },
       onTime: (gm) => {
         if (!Number.isFinite(gm)) return;
-        if (!api.authorityId || api.authorityId === api.publicId) return;
         mpTimeAdopt = gm;
       },
     });
@@ -3604,18 +3594,16 @@ patched += `
     if (api.publicId !== 100 || api.connected() !== true)
       throw new Error('M29: the join success was not parsed');
 
-    /* 3. the 30 Hz loop uploads state AND the clock: [26][21B] then [32][f32] */
+    /* 3. M40: the 30 Hz loop uploads state ONLY: [26][21B] (the type-32
+       clock upload is retired - the server owns the clock) */
     gameMin = 42.5;
     intervals[0].fn();
-    let st = wsInstances[0].sent.at(-2);
+    let st = wsInstances[0].sent.at(-1);
     st = st instanceof Uint8Array ? st : new Uint8Array(st);
     if (st[0] !== 26 || st.byteLength !== 22)
       throw new Error('M29: the state frame is missing from the send loop');
-    let tm = wsInstances[0].sent.at(-1);
-    tm = tm instanceof Uint8Array ? tm : new Uint8Array(tm);
-    if (tm[0] !== 32 || tm.byteLength !== 5
-        || Math.abs(new DataView(tm.buffer, tm.byteOffset).getFloat32(1, true) - 42.5) > 1e-6)
-      throw new Error('M29: the 30 Hz clock upload is missing or wrong (type ' + tm[0] + ')');
+    if (wsInstances[0].sent.filter((d) => (d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 32).length > 0)
+      throw new Error('M29: the type-32 clock upload must be retired (M40)');
 
     /* wire helpers: one 23B VivsWorldEdit, and a tick with real edit payloads
        + an optional bit4 time section (players/edits/animals/names/time order) */
@@ -3629,11 +3617,8 @@ patched += `
       return b;
     };
     const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
-    const buildTick = (flags, auth, tickId, players, edits, names, time) => {
+    const buildTick = (flags, tickId, players, edits, names, time) => {
       const parts = [new Uint8Array([27, flags])];
-      const head = new DataView(new ArrayBuffer(4));
-      head.setUint32(0, auth, true);
-      parts.push(new Uint8Array(head.buffer));
       if (flags & 1) {
         parts.push(w32(tickId), w32(players.length));
         for (const p of players) {
@@ -3664,12 +3649,12 @@ patched += `
       for (const q of parts) { buf.set(q, off); off += q.length; }
       return buf;
     };
-    const sendTick = (flags, auth, tickId, players, edits, names, time) =>
-      wsInstances[0].onmessage({ data: buildTick(flags, auth, tickId, players, edits, names, time).buffer.slice(0) });
+    const sendTick = (flags, tickId, players, edits, names, time) =>
+      wsInstances[0].onmessage({ data: buildTick(flags, tickId, players, edits, names, time).buffer.slice(0) });
 
-    /* 4. this tab IS the authority: mpEmit emits [28][23B] frames */
-    sendTick(0x01, 100, 1, [{ id: 100, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], [], [], null);
-    if (api.authorityId !== 100) throw new Error('M29: authorityId was not stored');
+    /* 4. connected: mpEmit emits [28][23B] frames (M40: any tab may edit;
+       the server validates) */
+    sendTick(0x01, 1, [{ id: 100, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], [], [], null);
     const sentN = wsInstances[0].sent.length;
     mpEmit(0, p0.idx, mpPayloadU8(1));
     if (wsInstances[0].sent.length !== sentN + 1) throw new Error('M29: authority mpEmit did not send');
@@ -3682,21 +3667,20 @@ patched += `
         || ed[9] !== 0 || ed[10] !== 0 || ed[11] !== 1 || ed[12] !== 0)
       throw new Error('M29: the edit frame fields are wrong');
 
-    /* 5. this tab is a FOLLOWER: mpEmit is silent and mutations are locked */
-    sendTick(0x01, 101, 2, [{ id: 101, x: 3, y: 0, z: -3, yaw: 1, state: 0 }], [], [], null);
-    if (!mpWorldLocked()) throw new Error('M29: mpWorldLocked must be true on a follower');
+    /* 5. M40: with another player in the tick there is no local lock -
+       mpEmit still uploads (the server is the validator) */
+    sendTick(0x01, 2, [{ id: 101, x: 3, y: 0, z: -3, yaw: 1, state: 0 }], [], [], null);
     const sentN2 = wsInstances[0].sent.length;
     mpEmit(3, 0, null);
-    if (wsInstances[0].sent.length !== sentN2)
-      throw new Error('M29: a follower must not upload world edits');
-    if (mpWorldLockedGuard() !== true) throw new Error('M29: the follower guard must trip');
+    if (wsInstances[0].sent.length !== sentN2 + 1)
+      throw new Error('M29: a connected tab must still upload world edits');
 
     /* 6. relayed edits apply deterministically (tick bit1 section) */
     const itemsBefore = items.length;
     const pl = plants.find((q) => q.state === 'ready' && q.chargesLeft > 1);
     if (!pl) throw new Error('M29: no ready plant with charges left to harvest');
     const plTarget = pl.chargesLeft - 1;           /* mirror one harvest */
-    sendTick(0x03, 101, 3, [], [
+    sendTick(0x03, 3, [], [
       buildEdit(101, p0.idx, 0, mpPayloadU8(1)),   /* palm: 2 -> 1 coco */
       buildEdit(101, plants.indexOf(pl), 1, mpPayloadU8(plTarget)),
     ], [], null);
@@ -3711,7 +3695,7 @@ patched += `
       throw new Error('M29: the relayed plant harvest was not mirrored');
 
     /* camp + all five structures arrive in one bit1 walk */
-    sendTick(0x03, 101, 4, [], [
+    sendTick(0x03, 4, [], [
       buildEdit(101, 0, 2, mpPayloadCamp(7.5, -4.25, 2.4)),
       buildEdit(101, 0, 3, null),
       buildEdit(101, 0, 4, null),
@@ -3740,7 +3724,7 @@ patched += `
     const pl3 = plants.find((q) => q !== pl && q.state === 'ready' && q.chargesLeft > 1);
     if (!pl3) throw new Error('M29: no second ready plant for the self-skip test');
     const pl3Target = pl3.chargesLeft - 1;
-    sendTick(0x03, 101, 5, [], [
+    sendTick(0x03, 5, [], [
       buildEdit(100, plants.indexOf(pl2), 1, mpPayloadU8(0)),
       buildEdit(101, plants.indexOf(pl3), 1, mpPayloadU8(pl3Target)),
     ], [], null);
@@ -3770,13 +3754,14 @@ patched += `
     if (p0.cocos !== 0 || items.length !== itemsBefore)
       throw new Error('M29: the EDIT_SYNC replay is not idempotent');
 
-    /* 8. bit4: the authority ignores its own time, followers stash it and
-       frame() snaps the clock, then local advance resumes */
-    sendTick(0x11, 100, 6, [], [], [], 999.25);
-    if (mpTimeAdopt !== 0) throw new Error('M29: the authority must ignore bit4');
-    sendTick(0x11, 101, 7, [], [], [], 512.3);
+    /* 8. bit4: the server clock is adopted by EVERY tab (M40) - frame()
+       snaps the clock to the stashed value, then local advance resumes */
+    sendTick(0x11, 6, [], [], [], 999.25);
+    if (Math.abs(mpTimeAdopt - 999.25) > 1e-4)
+      throw new Error('M29: the clock was not stashed from bit4');
+    sendTick(0x11, 7, [], [], [], 512.3);
     if (Math.abs(mpTimeAdopt - 512.3) > 1e-4)
-      throw new Error('M29: the authority clock was not stashed from bit4');
+      throw new Error('M29: the latest bit4 clock must win');
     started = true; dead = false; won = false; onRaft = false;
     /* earlier blocks may have left out-of-range stats; the HUD draws before
        frame() clamps them, so clamp them the way the sim would */
@@ -3859,13 +3844,6 @@ patched += `
     throw new Error('M30: crab slots are not 64+');
   if (byType(2)[0].slot !== 128)
     throw new Error('M30: the first tiger slot is not 128');
-  const collected = mpCollectAnimals();
-  if (collected.length !== expectTotal)
-    throw new Error('M30: collect count mismatch (' + collected.length + ')');
-  for (const a of collected)
-    if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(a.z) || !Number.isFinite(a.yaw))
-      throw new Error('M30: a collected animal has a non-finite transform');
-
   const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
   const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
   const intervals = [], timeouts = [], wsInstances = [];
@@ -3903,8 +3881,6 @@ patched += `
     let animalTickEntries = 0;
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M30Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
       onAnimals: (m) => { animalTickEntries += m.size; },
     });
     mpApi = api;
@@ -3916,25 +3892,28 @@ patched += `
     new DataView(jsBuf.buffer).setUint32(1, 110, false);
     jsBuf[0] = 8;
     wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
-    if (api.publicId !== 110 || api.connected() !== true || api.isAuthority() !== false)
-      throw new Error('M30: the join success was not parsed / authority check wrong');
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M30: the join success was not parsed');
 
-    /* 3. before any tick (authority unknown): the 30 Hz loop sends state+clock
-       and NEVER a type-29 animal frame */
-    intervals[0].fn();
+    /* 3. M40: before any tick the 30 Hz loop sends exactly ONE frame -
+       the type-26 state */
     {
-      const tail = wsInstances[0].sent.slice(-2);
-      if (tail.length !== 2) throw new Error('M30: the loop sent ' + tail.length + ' frames, expected state+clock');
-      for (const d of tail)
-        if ((d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 29)
-          throw new Error('M30: a non-authority tab uploaded animals');
+      /* M40: the 30 Hz loop sends EXACTLY ONE frame - the type-26 state.
+         The type-29 animal upload and type-32 clock upload are retired
+         (server-sim animals + server clock) */
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const tail = wsInstances[0].sent.slice(sentN);
+      if (tail.length !== 1) throw new Error('M30: the loop sent ' + tail.length + ' frames, expected state only');
+      const t = tail[0] instanceof Uint8Array ? tail[0] : new Uint8Array(tail[0]);
+      if (t[0] !== 26 || t.length !== 1 + 21)
+        throw new Error('M30: the 30 Hz frame is not the type-26 state (type ' + t[0] + ', len ' + t.length + ')');
     }
 
     /* wire helpers: a tick with players (bit0) + real animals (bit2) */
     const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
-    const head4 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
-    const buildTick = (flags, auth, tickId, players, animalsList) => {
-      const parts = [new Uint8Array([27, flags]), head4(auth)];
+    const buildTick = (flags, tickId, players, animalsList) => {
+      const parts = [new Uint8Array([27, flags])];
       if (flags & 1) {
         parts.push(w32(tickId), w32(players.length));
         for (const p of players) {
@@ -3965,48 +3944,33 @@ patched += `
       for (const q of parts) { buf.set(q, off); off += q.length; }
       return buf;
     };
-    const sendTick = (flags, auth, tickId, players, animalsList) =>
-      wsInstances[0].onmessage({ data: buildTick(flags, auth, tickId, players, animalsList).buffer.slice(0) });
+    const sendTick = (flags, tickId, players, animalsList) =>
+      wsInstances[0].onmessage({ data: buildTick(flags, tickId, players, animalsList).buffer.slice(0) });
 
-    /* 4. this tab IS the authority: the 30 Hz loop appends [29][count][count*24B] */
-    sendTick(0x01, 110, 1, [{ id: 110, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], null);
-    if (api.isAuthority() !== true)
-      throw new Error('M30: the tab is not recognized as the authority');
+    /* 4. M40: the type-29 animal upload is retired - the loop now sends
+       exactly the type-26 state frame (roster is server-simulated, M35) */
+    sendTick(0x01, 1, [{ id: 110, x: 0, y: 0, z: 0, yaw: 0, state: 0 }], null);
     gameMin = 42.75;
     intervals[0].fn();
-    let up = wsInstances[0].sent.at(-1);
-    up = up instanceof Uint8Array ? up : new Uint8Array(up);
-    if (up[0] !== 29)
-      throw new Error('M30: the authority did not upload animals in the 30 Hz loop (got type ' + up[0] + ')');
-    const upDv = new DataView(up.buffer, up.byteOffset, up.byteLength);
-    const upCount = upDv.getUint32(1, true);
-    if (upCount !== expectTotal || up.byteLength !== 5 + upCount * 24)
-      throw new Error('M30: the animal upload size is wrong (count ' + upCount + ', len ' + up.byteLength + ')');
     {
-      const o = 5;   /* entry 0 = first fish school (slot 0, type 0) */
-      if (upDv.getUint16(o, true) !== 0 || up[o + 2] !== 0)
-        throw new Error('M30: entry 0 slot/type are not 0/0');
-      if (!Number.isFinite(upDv.getFloat32(o + 4, true)) || !Number.isFinite(upDv.getFloat32(o + 16, true)))
-        throw new Error('M30: entry 0 transform is not finite');
-      const o1 = 5 + byType(0).length * 24;   /* first crab = slot 64, type 1 */
-      if (upDv.getUint16(o1, true) !== 64 || up[o1 + 2] !== 1)
-        throw new Error('M30: the first crab entry is not slot 64/type 1');
+      const up = wsInstances[0].sent.at(-1);
+      const t = up instanceof Uint8Array ? up : new Uint8Array(up);
+      if (t[0] !== 26)
+        throw new Error('M30: the 30 Hz frame must be state-only after M40 (got type ' + t[0] + ')');
     }
 
-    /* 5. this tab is a FOLLOWER: no animal uploads, and the bit-2 section
-       (between players bit0 and names bit3) populates api.animals */
-    sendTick(0x01, 111, 2, [{ id: 111, x: 3, y: 0, z: -3, yaw: 1, state: 0 }], null);
-    if (api.isAuthority() !== false)
-      throw new Error('M30: the tab must be a follower now');
+    /* 5. the bit-2 section populates api.animals (the server-simulated
+       roster) and no tab uploads animals anymore */
+    sendTick(0x01, 2, [{ id: 111, x: 3, y: 0, z: -3, yaw: 1, state: 0 }], null);
     const sentN = wsInstances[0].sent.length;
     intervals[0].fn();
     {
       const tail = wsInstances[0].sent.slice(sentN);
-      if (tail.length !== 2)
-        throw new Error('M30: the follower loop sent ' + tail.length + ' frames, expected state+clock');
+      if (tail.length !== 1)
+        throw new Error('M30: the loop sent ' + tail.length + ' frames, expected state only');
       for (const d of tail)
         if ((d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 29)
-          throw new Error('M30: a follower uploaded animals');
+          throw new Error('M30: a tab uploaded animals');
     }
 
     /* relayed snapshot: a school anchor, one LIVE tiger, one DEAD crab */
@@ -4017,7 +3981,7 @@ patched += `
     const s0 = schools[0];
     const rx = 30, rz = -20;             /* school anchor target */
     const tx = -40, tz = 25, tyaw = 1.2;  /* live tiger target */
-    sendTick(0x05, 111, 3,
+    sendTick(0x05, 3,
       [{ id: 110, x: 0.5, y: 0.5, z: 0.5, yaw: 0.25, state: 0 },
        { id: 111, x: 3, y: 0, z: -3, yaw: 1, state: 0 }],
       [
@@ -4158,8 +4122,6 @@ patched += `
     /* mirror the page's ?mp= block hooks exactly */
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M31Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
       onEdit: (pid, eidx, kind, action, payload) => {
         if (pid === api.publicId) return;
         mpApplyWorldEdit(kind, eidx, payload);
@@ -4170,7 +4132,6 @@ patched += `
       },
       onTime: (gm) => {
         if (!Number.isFinite(gm)) return;
-        if (!api.authorityId || api.authorityId === api.publicId) return;
         mpTimeAdopt = gm;
       },
     });
@@ -4196,11 +4157,8 @@ patched += `
       return b;
     };
     const w32 = (v) => { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, v, true); return new Uint8Array(b.buffer); };
-    const buildTick = (flags, auth, tickId, players, time) => {
+    const buildTick = (flags, tickId, players, time) => {
       const parts = [new Uint8Array([27, flags])];
-      const head = new DataView(new ArrayBuffer(4));
-      head.setUint32(0, auth, true);
-      parts.push(new Uint8Array(head.buffer));
       if (flags & 1) {
         parts.push(w32(tickId), w32(players.length));
         for (const p of players) {
@@ -4223,23 +4181,21 @@ patched += `
       for (const q of parts) { buf.set(q, off); off += q.length; }
       return buf;
     };
-    const sendTick = (flags, auth, tickId, players, time) =>
+    const sendTick = (flags, tickId, players, time) =>
       wsInstances[wsInstances.length - 1].onmessage(
-        { data: buildTick(flags, auth, tickId, players, time).buffer.slice(0) });
+        { data: buildTick(flags, tickId, players, time).buffer.slice(0) });
     const PLAYER_120 = { id: 120, x: 0.5, y: 0, z: -0.5, yaw: 0.25, state: 0 };
     const PLAYER_121 = { id: 121, x: 3.5, y: 0, z: -3.5, yaw: 1.1, state: 0 };
-    sendTick(0x01, 121, 1, [PLAYER_120, PLAYER_121], null);
-    if (api.authorityId !== 121 || api.isAuthority() !== false)
-      throw new Error('M31: the tab must start as a follower of 121');
-    if (mpWorldLocked() !== true) throw new Error('M31: the follower lock must be on');
+    sendTick(0x01, 1, [PLAYER_120, PLAYER_121], null);
     {
+      /* M40: no authority tracking - the loop sends exactly the type-26
+         state frame for any connected tab */
       const sentN = wsInstances[0].sent.length;
       intervals[0].fn();
       const tail = wsInstances[0].sent.slice(sentN);
-      if (tail.length !== 2) throw new Error('M31: the follower loop sent ' + tail.length + ' frames, expected state+clock');
-      for (const d of tail)
-        if ((d instanceof Uint8Array ? d : new Uint8Array(d))[0] === 29)
-          throw new Error('M31: a follower uploaded animals');
+      if (tail.length !== 1) throw new Error('M31: the loop sent ' + tail.length + ' frames, expected state only');
+      if ((tail[0] instanceof Uint8Array ? tail[0] : new Uint8Array(tail[0]))[0] !== 26)
+        throw new Error('M31: the 30 Hz frame is not the type-26 state');
     }
 
     /* 3. DROP + RECONNECT: the close handler cancels the uplink, the 1 s
@@ -4266,11 +4222,9 @@ patched += `
       const sentN = ws2.sent.length;
       intervals[1].fn();
       const tail = ws2.sent.slice(sentN);
-      if (tail.length !== 2) throw new Error('M31: the resumed loop sent ' + tail.length + ' frames, expected state+clock');
-      for (const d of tail) {
-        const t = d instanceof Uint8Array ? d : new Uint8Array(d);
-        if (t[0] !== 26 && t[0] !== 32) throw new Error('M31: the resumed loop sent the wrong frame (type ' + t[0] + ')');
-      }
+      if (tail.length !== 1) throw new Error('M31: the resumed loop sent ' + tail.length + ' frames, expected state only');
+      if ((tail[0] instanceof Uint8Array ? tail[0] : new Uint8Array(tail[0]))[0] !== 26)
+        throw new Error('M31: the resumed loop sent the wrong frame (type ' + (tail[0] instanceof Uint8Array ? tail[0][0] : new Uint8Array(tail[0])[0]) + ')');
       if (api.connected() !== true) throw new Error('M31: presence must be visible after the rejoin');
     }
 
@@ -4299,7 +4253,7 @@ patched += `
 
     /* 5. clock re-adoption: bit4 from the authority stashes the pending
        clock and frame() snaps to it after the reconnect */
-    sendTick(0x11, 121, 2, [PLAYER_120, PLAYER_121], 611.25);
+    sendTick(0x11, 2, [PLAYER_120, PLAYER_121], 611.25);
     if (Math.abs(mpTimeAdopt - 611.25) > 1e-4)
       throw new Error('M31: the authority clock was not stashed from bit4');
     started = true; dead = false; won = false; onRaft = false;
@@ -4313,22 +4267,19 @@ patched += `
     if (gameMin <= 611.25 || gameMin - 611.25 > 0.05)
       throw new Error('M31: the local clock did not resume after the snap: ' + gameMin);
 
-    /* 6. authority flips back to this tab: the resumed loop must now also
-       upload the animal snapshot (authority liveness for the server) */
-    sendTick(0x01, 120, 3, [PLAYER_120, PLAYER_121], null);
-    if (api.isAuthority() !== true || mpWorldLocked() !== false)
-      throw new Error('M31: the authority flip was not recognized');
+    /* 6. M40: no authority flip exists anymore - the resumed loop sends
+       exactly the type-26 state frame; the type-29 animal snapshot is
+       retired (server-simulated roster) */
+    sendTick(0x01, 3, [PLAYER_120, PLAYER_121], null);
     {
       const sentN = ws2.sent.length;
       intervals[1].fn();
       const tail = ws2.sent.slice(sentN);
-      if (tail.length !== 3) throw new Error('M31: the authority loop sent ' + tail.length + ' frames, expected state+clock+animals');
-      const types = tail.map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d))[0]);
-      if (types[0] !== 26 || types[1] !== 32 || types[2] !== 29)
-        throw new Error('M31: the resumed authority loop is missing the animal snapshot: ' + types.join(','));
-      const up = tail[2];
-      if (up.byteLength !== 5 + expectTotal * 24)
-        throw new Error('M31: the resumed animal upload has the wrong size (len ' + up.byteLength + ')');
+      if (tail.length !== 1)
+        throw new Error('M31: the resumed loop sent ' + tail.length + ' frames, expected state only');
+      const t = tail[0] instanceof Uint8Array ? tail[0] : new Uint8Array(tail[0]);
+      if (t[0] !== 26 || t.length !== 1 + 21)
+        throw new Error('M31: the resumed frame is not the type-26 state (type ' + t[0] + ')');
     }
 
     /* 7. back to single-player: everything goes inert again */
@@ -4625,8 +4576,6 @@ patched += `
     const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M35Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
     });
     mpApi = api;
 
@@ -4661,9 +4610,9 @@ patched += `
         ? { slot: s, type: r.type, x: f[0], y: 0, z: f[1], yaw: f[2], dead: false }
         : { slot: s, type: r.type, x: 12.5 + s * 0.001, y: 0, z: -8.25 + s * 0.001, yaw: 0.1, dead: false });
     }
-    const sendAnimalsTick = (auth, tickEntries) => {
+    const sendAnimalsTick = (tickEntries) => {
       const u32b = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; };
-      const parts = [new Uint8Array([27, 0x04]), u32b(auth), u32b(tickEntries.length)];
+      const parts = [new Uint8Array([27, 0x04]), u32b(tickEntries.length)];
       for (const a of tickEntries) {
         const b = new Uint8Array(24);
         const dv = new DataView(b.buffer);
@@ -4681,24 +4630,23 @@ patched += `
       wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
     };
 
-    /* 3. this tab IS the authority and the snapshot parses */
-    sendAnimalsTick(110, entries);
-    if (api.isAuthority() !== true)
-      throw new Error('M35: the tab is not recognized as the authority');
+    /* 3. the snapshot parses (M40: no authority - the roster is the
+       server's, every tab renders it) */
+    sendAnimalsTick(entries);
     if (api.animals.size !== 28)
       throw new Error('M35: api.animals must hold the 28 server entries, got ' + api.animals.size);
     for (const s of expectedSlots)
       if (!api.animals.has(s)) throw new Error('M35: slot ' + s + ' missing from the parsed snapshot');
 
-    /* 4. the M30 upload side is untouched: the 30 Hz loop still relays the
-       authority's own roster as type 29 (retired at M40) */
-    intervals[0].fn();
+    /* 4. M40: the type-29 animal upload is retired - the 30 Hz loop sends
+       exactly the type-26 state frame */
     {
-      const tail = wsInstances[0].sent.slice(-3).map((d) =>
-        (d instanceof Uint8Array ? d : new Uint8Array(d))[0]);
-      const upIdx = tail.lastIndexOf(29);
-      if (upIdx < 0)
-        throw new Error('M35: the authority loop no longer uploads type 29: ' + tail.join(','));
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const tail = wsInstances[0].sent.slice(sentN)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
+      if (tail.length !== 1 || tail[0][0] !== 26)
+        throw new Error('M35: the 30 Hz loop is not state-only: ' + tail.map((d) => d[0]).join(','));
     }
 
     /* 5. the authority tab ADOPTS the server snapshot (the M30 skip is gone):
@@ -4827,8 +4775,6 @@ patched += `
     const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M36Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
     });
     mpApi = api;
     wsInstances[0].readyState = 1;
@@ -4882,9 +4828,9 @@ patched += `
       }
     if (entries.length !== 51)
       throw new Error('M36: the roster must be 51 animals, got ' + entries.length);
-    const sendAnimalsTick = (auth, tickEntries) => {
+    const sendAnimalsTick = (tickEntries) => {
       const u32b = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; };
-      const parts = [new Uint8Array([27, 0x04]), u32b(auth), u32b(tickEntries.length)];
+      const parts = [new Uint8Array([27, 0x04]), u32b(tickEntries.length)];
       for (const a of tickEntries) {
         const b = new Uint8Array(24);
         const dv = new DataView(b.buffer);
@@ -4902,27 +4848,23 @@ patched += `
       wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
     };
 
-    /* 5. this tab IS the authority and the full snapshot parses */
-    sendAnimalsTick(110, entries);
-    if (api.isAuthority() !== true)
-      throw new Error('M36: the tab is not recognized as the authority');
+    /* 5. the full snapshot parses (M40: the roster is the server's) */
+    sendAnimalsTick(entries);
     if (api.animals.size !== 51)
       throw new Error('M36: api.animals must hold the 51 server entries, got ' + api.animals.size);
     for (const e of entries)
       if (!api.animals.has(e.slot))
         throw new Error('M36: slot ' + e.slot + ' missing from the parsed snapshot');
 
-    /* 6. the M30 upload side is untouched: the 30 Hz loop still relays the
-       authority's own FULL 51-entry roster as type 29 (retired at M40) */
-    intervals[0].fn();
+    /* 6. M40: the type-29 animal upload is retired - the 30 Hz loop sends
+       exactly the type-26 state frame */
     {
-      const up = wsInstances[0].sent.slice(-10)
-        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)))
-        .find((d) => d[0] === 29);
-      if (!up) throw new Error('M36: the authority loop no longer uploads type 29');
-      const cnt = new DataView(up.buffer, up.byteOffset).getUint32(1, true);
-      if (cnt !== 51 || up.length !== 1 + 4 + 51 * 24)
-        throw new Error('M36: the type-29 upload has ' + cnt + ' entries (want 51), length ' + up.length);
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const tail = wsInstances[0].sent.slice(sentN)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
+      if (tail.length !== 1 || tail[0][0] !== 26)
+        throw new Error('M36: the 30 Hz loop is not state-only: ' + tail.map((d) => d[0]).join(','));
     }
 
     /* 7. all ten bands ADOPT the server transforms: the four far targets
@@ -5042,14 +4984,13 @@ patched += `
   const saveCocos = { 5: palms[5].cocos, 10: palms[10].cocos, 42: palms[42].cocos };
   const saveRig = { x: rig.position.x, y: rig.position.y, z: rig.position.z };
 
-  const sendTick = (auth, time, wstate, evs) => {
+  const sendTick = (time, wstate, evs) => {
     const parts = [];
-    const head = new Uint8Array(6);
+    const head = new Uint8Array(2);
     let flags = 0;
     if (time !== undefined) flags |= 1 << 4;
     if (wstate !== undefined) flags |= 1 << 5;
     head[0] = 27; head[1] = flags;
-    new DataView(head.buffer).setUint32(2, auth, true);
     parts.push(head);
     if (time !== undefined) {
       const tb = new Uint8Array(4);
@@ -5089,8 +5030,6 @@ patched += `
     const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M37Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
       /* the game's own onTime: adopt the server clock (every tab, authority included) */
       onTime: (gm) => { if (Number.isFinite(gm)) mpTimeAdopt = gm; },
     });
@@ -5104,17 +5043,15 @@ patched += `
     if (api.publicId !== 110 || api.connected() !== true)
       throw new Error('M37: the join success was not parsed');
 
-    /* 3. the SERVER clock is adopted by EVERY tab - this tab IS the
-       authority (publicId 110) and bit4 (the server's own clock) snaps it */
+    /* 3. the SERVER clock is adopted by EVERY tab (M40) - bit4
+       (the server's own clock) snaps it */
     started = true; dead = false;
-    sendTick(110, 512.25, 0, []);
+    sendTick(512.25, 0, []);
     if (!api.weather || api.weather.state !== 'clear' || api.weather.events.length !== 0)
       throw new Error('M37: the bit5 section did not parse to a clear weather state');
-    if (api.isAuthority() !== true)
-      throw new Error('M37: this tab is not recognized as the authority');
     pump(1);
     if (Math.abs(gameMin - 512.25) > 1e-4)
-      throw new Error('M37: the authority did not adopt the server clock: ' + gameMin);
+      throw new Error('M37: the clock did not adopt the server value: ' + gameMin);
     if (effectiveWeather() !== 'clear')
       throw new Error('M37: effectiveWeather did not adopt the server state');
 
@@ -5127,7 +5064,7 @@ patched += `
       { kind: 0, t: 1168.5172978735109, a: 111.61525450549635, b: -71.26843317778255 },
     ];
     rig.position.set(spawn.x, heightAt(spawn.x, spawn.z), spawn.z);
-    sendTick(110, 1140.0, 3, stormEvs);
+    sendTick(1140.0, 3, stormEvs);
     if (api.weather.state !== 'storm' || api.weather.events.length !== 3)
       throw new Error('M37: the storm section did not parse: ' + JSON.stringify(api.weather));
     if (effectiveWeather() !== 'storm')
@@ -5139,7 +5076,7 @@ patched += `
       throw new Error('M37: the first drop fired before its t');
 
     /* 5. clock passes t1: the palm-10 drop fires once */
-    sendTick(110, 1144.0, 3, stormEvs);
+    sendTick(1144.0, 3, stormEvs);
     pump(1);
     if (palms[10].cocos !== saveCocos[10] - 1)
       throw new Error('M37: the palm-10 drop did not fire: ' + palms[10].cocos);
@@ -5150,14 +5087,14 @@ patched += `
       throw new Error('M37: the palm-10 drop fired twice');
 
     /* 6. clock passes t2: the palm-42 drop fires */
-    sendTick(110, 1156.0, 3, stormEvs);
+    sendTick(1156.0, 3, stormEvs);
     pump(1);
     if (palms[42].cocos !== saveCocos[42] - 1)
       throw new Error('M37: the palm-42 drop did not fire');
 
     /* 7. clock passes t3: the strike fires (flash + bolt at the server x,z)
        and does NOT fire again on the following frames */
-    sendTick(110, 1169.0, 3, stormEvs);
+    sendTick(1169.0, 3, stormEvs);
     pump(1);
     if (stormFlash < 0.5)
       throw new Error('M37: the strike did not flash: ' + stormFlash);
@@ -5172,7 +5109,7 @@ patched += `
 
     /* 8. a NEW server list (the storm seg advanced) resets the done set:
        a new list identity re-fires its own events from scratch */
-    sendTick(110, 1170.0, 3, [{ kind: 1, t: 1169.5, a: 5, b: 0 }]);
+    sendTick(1170.0, 3, [{ kind: 1, t: 1169.5, a: 5, b: 0 }]);
     pump(1);
     if (palms[5].cocos !== saveCocos[5] - 1)
       throw new Error('M37: the new list drop did not fire (done set not reset)');
@@ -5180,18 +5117,15 @@ patched += `
     if (palms[5].cocos !== saveCocos[5] - 1)
       throw new Error('M37: the new list drop fired twice');
 
-    /* 9. the M30 upload side is untouched: the 30 Hz loop still relays
-       type 32 (the clock; the server only tracks it for plausibility now) */
-    intervals[0].fn();
+    /* 9. M40: the type-32 clock upload is retired (server clock, bit4)
+       - the 30 Hz loop sends exactly the type-26 state frame */
     {
-      const up = wsInstances[0].sent.slice(-10)
-        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)))
-        .find((d) => d[0] === 32);
-      if (!up) throw new Error('M37: the state loop no longer uploads type 32');
-      if (up.length !== 1 + 4) throw new Error('M37: the type-32 upload is malformed');
-      const upT = new DataView(up.buffer, up.byteOffset).getFloat32(1, true);
-      if (Math.abs(upT - gameMin) > 0.1)
-        throw new Error('M37: the type-32 upload does not carry the clock: ' + upT);
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const tail = wsInstances[0].sent.slice(sentN)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
+      if (tail.length !== 1 || tail[0][0] !== 26 || tail[0].length !== 1 + 21)
+        throw new Error('M37: the 30 Hz loop is not state-only: ' + tail.map((d) => d[0]).join(','));
     }
 
     /* 10. back to single-player: the local schedule is authoritative again */
@@ -5276,11 +5210,10 @@ patched += `
 
   /* tick builder: [27][u8 flags][u32 authority LE], then a bit0 players
      section (u32 tickId, u32 count, count * 21B state) when players !== null */
-  const sendPlayersTick = (auth, tickId, players) => {
+  const sendPlayersTick = (tickId, players) => {
     const parts = [];
-    const head = new Uint8Array(6);
+    const head = new Uint8Array(2);
     head[0] = 27; head[1] = players ? 1 : 0;
-    new DataView(head.buffer).setUint32(2, auth, true);
     parts.push(head);
     if (players) {
       const b = new Uint8Array(8 + players.length * 21);
@@ -5310,8 +5243,6 @@ patched += `
     const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M38Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
     });
     mpApi = api;
     wsInstances[0].readyState = 1;
@@ -5335,7 +5266,7 @@ patched += `
        from the stamp; remotes still excludes self but keeps 220 */
     const selfStamp = { id: 110, x: 50, y: 2, z: -30, yaw: 2.4 };
     const other = { id: 220, x: 80, y: 0, z: 90, yaw: 0.7 };
-    sendPlayersTick(110, 7, [selfStamp, other]);
+    sendPlayersTick(7, [selfStamp, other]);
     if (!api.self)
       throw new Error('M38: mpApi.self was not populated from the own tick entry');
     if (Math.abs(api.self.x - 50) > 1e-3 || Math.abs(api.self.y - 2) > 1e-3 ||
@@ -5371,35 +5302,25 @@ patched += `
       throw new Error('M38: the >30u divergence did not snap back to the stamp: ' +
         rig.position.x + ', ' + rig.position.y + ', ' + rig.position.z);
 
-    /* 6. upload side untouched: the 30 Hz loop still sends type 26 (21B +
-       type byte) + type 32, and type 29 is still authority-gated (M30) -
-       this tab is authority, so all three go out; with the authority
-       elsewhere the type-29 upload stops (the gate stays until M40) */
-    intervals[0].fn();
+    /* 6. M40: the 30 Hz loop sends EXACTLY the type-26 state frame
+       (21B + type byte) - the type-29 animal upload and the type-32
+       clock upload are retired */
     {
-      const sent = wsInstances[0].sent.slice(-3)
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const sent = wsInstances[0].sent.slice(sentN)
         .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
-      const s26 = sent.find((d) => d[0] === 26);
-      const s29 = sent.find((d) => d[0] === 29);
-      const s32 = sent.find((d) => d[0] === 32);
-      if (!s26 || s26.length !== 1 + 21)
-        throw new Error('M38: the 30 Hz type-26 state upload is gone or malformed');
-      if (!s32)
-        throw new Error('M38: the 30 Hz type-32 clock upload is gone');
-      if (!s29 || s29.length < 5)
-        throw new Error('M38: the authority type-29 animal upload is gone (M30 gate must stay)');
+      if (sent.length !== 1 || sent[0][0] !== 26 || sent[0].length !== 1 + 21)
+        throw new Error('M38: the 30 Hz loop is not state-only: ' + sent.map((d) => d[0]).join(','));
     }
-    sendPlayersTick(200, 8, [selfStamp]);   /* the authority is now tab 200 */
-    if (api.isAuthority() !== false)
-      throw new Error('M38: authority tracking regressed');
-    intervals[0].fn();
+    sendPlayersTick(8, [selfStamp]);
     {
-      const sent = wsInstances[0].sent.slice(-2)
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const sent = wsInstances[0].sent.slice(sentN)
         .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
-      if (!sent.find((d) => d[0] === 26))
-        throw new Error('M38: non-authority tabs must still upload their type-26 state');
-      if (sent.find((d) => d[0] === 29))
-        throw new Error('M38: the type-29 upload is no longer authority-gated');
+      if (sent.length !== 1 || sent[0][0] !== 26)
+        throw new Error('M38: the loop must keep uploading the type-26 state');
     }
 
     /* 7. disconnect: the server stamp is gone, local sim is authoritative
@@ -5474,8 +5395,6 @@ patched += `
     const rejections = [];
     const api = mp.attachMultiplayer({
       rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M39Tester', inWater: () => false,
-      gameMin: () => gameMin,
-      animals: mpCollectAnimals,
       onEditReject: (pid, eidx, kind, reason) => rejections.push({ pid, eidx, kind, reason }),
     });
     mpApi = api;
@@ -5538,6 +5457,129 @@ patched += `
     globalThis.clearInterval = realClearInterval;
     globalThis.setTimeout = realSetTimeout;
     mpApi = null;
+  }
+}
+
+/* ---- M40: protocol v2 hardening + full v2 relay removal (client side).
+   Zero client authority: the authority concept (authorityPublicId wire
+   field, authorityId tracking, the world-lock, the type-29 animal upload,
+   the type-32 clock upload) is GONE from the client. Every tab uploads
+   state + edits; the server owns the clock, the weather, the animal sim,
+   and edit validation. Tick sections now start at byte 2 (flags byte only). */
+{
+  /* 1. the retired client-authority surface is gone from the page */
+  if (typeof mpWorldLocked !== 'undefined')
+    throw new Error('M40: mpWorldLocked must be removed from the page');
+  if (typeof mpWorldLockedGuard !== 'undefined')
+    throw new Error('M40: mpWorldLockedGuard must be removed from the page');
+  if (typeof mpCollectAnimals !== 'undefined')
+    throw new Error('M40: mpCollectAnimals must be removed from the page');
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  const saveGameMin = gameMin, saveStarted = started, saveDead = dead;
+  const saveWon = won, saveOnRaft = onRaft;
+  const saveCocos = palms.map((q) => q.cocos);
+  const saveItems = items.length;
+  const saveCooking = fires.map((f) => f.cooking);
+  for (const f of fires) if (typeof f.cooking === 'string') f.cooking = null;
+  const palmIdx = palms.findIndex((q) => q.cocos === 2);
+  if (palmIdx < 0) throw new Error('M40: no palm with 2 coconuts to shake');
+  const p0 = palms[palmIdx];
+
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    let timeSeen = null;
+    let editSeen = null;
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M40Tester', inWater: () => false,
+      onEdit: (pid, eidx, kind, action, payload) => {
+        editSeen = { pid, eidx, kind, action, payload };
+        mpApplyWorldEdit(kind, eidx, payload);
+      },
+      onTime: (gm) => { if (Number.isFinite(gm)) timeSeen = gm; },
+    });
+    mpApi = api;
+
+    /* 2. no authority API surface on the module (types 29/32 retired) */
+    if ('authorityId' in api) throw new Error('M40: api.authorityId must be gone');
+    if (typeof api.isAuthority === 'function') throw new Error('M40: api.isAuthority must be gone');
+    if (typeof mp.MSG_VIVS_ANIMALS === 'number' || 'MSG_VIVS_ANIMALS' in mp)
+      throw new Error('M40: MSG_VIVS_ANIMALS must be retired');
+    if ('MSG_VIVS_TIME' in mp) throw new Error('M40: MSG_VIVS_TIME must be retired');
+
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M40: the join success was not parsed');
+
+    /* 3. the 30 Hz uplink is state-only: exactly one type-26 frame, never
+       29 (animals, server-sim) or 32 (clock, server-owned) */
+    {
+      const sentN = wsInstances[0].sent.length;
+      intervals[0].fn();
+      const tail = wsInstances[0].sent.slice(sentN)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
+      if (tail.length !== 1 || tail[0][0] !== 26 || tail[0].length !== 1 + 21)
+        throw new Error('M40: the uplink is not state-only: ' + tail.map((d) => d[0]).join(','));
+    }
+
+    /* 4. tick wire v2: sections start at byte 2 - [27][flags][...]. A
+       bit1 edits + bit4 time tick: the edit applies for THIS tab's
+       sender id AND the server clock is adopted by this same tab (no
+       authority self-exclusion) */
+    {
+      const edit = new Uint8Array(23);
+      new DataView(edit.buffer).setUint32(0, 110, true);   /* sender = this tab */
+      new DataView(edit.buffer).setUint32(4, p0.idx, true);
+      edit[8] = 0;                                          /* kind palm */
+      edit[9] = 0;                                          /* action */
+      edit[10] = 1;                                         /* payload[0]: new coco count 1 */
+      const b = new Uint8Array(2 + 4 + 23 + 4);
+      b[0] = 27; b[1] = 0x12;
+      new DataView(b.buffer).setUint32(2, 1, true);         /* 1 edit, right after flags */
+      b.set(edit, 6);
+      new DataView(b.buffer).setFloat32(6 + 23, 733.5, true);
+      wsInstances[0].onmessage({ data: b.buffer.slice(0) });
+      if (!editSeen || editSeen.eidx !== p0.idx || editSeen.kind !== 0)
+        throw new Error('M40: the bit1 edit section (offset 2) was not parsed');
+      if (p0.cocos !== 1)
+        throw new Error('M40: the relayed edit was not applied: ' + p0.cocos);
+      if (timeSeen === null || Math.abs(timeSeen - 733.5) > 1e-4)
+        throw new Error('M40: the bit4 clock (offset 2) was not adopted: ' + timeSeen);
+    }
+
+    api.close();
+    mpApi = null;
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    gameMin = saveGameMin;
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+    palms.forEach((q, i) => { q.cocos = saveCocos[i]; });
+    items.length = saveItems;
+    fires.forEach((f, i) => { f.cooking = saveCooking[i]; });
+    for (const av of mpAvatars.values()) scene.remove(av.grp);
+    mpAvatars.clear();
   }
 }
 `;
