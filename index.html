@@ -4518,6 +4518,7 @@ function frame(t) {
   rig.legL.rotation.x = sw; rig.legR.rotation.x = -sw;
   rig.armL.rotation.x = -sw * 0.6;
   rig.armR.rotation.x = sw * 0.6 + (spearSwing > 0 ? -Math.sin((0.35 - spearSwing) * 18) * 1.2 : 0);
+  mpSelfFrame(dt);      /* M38: server player authority ‒ reconcile own rig to the server stamp */
   mpRemotesFrame(dt);   /* M28: remote-player presence (null-guarded, inert single-player) */
 
   /* survival: time, stats, world sim */
@@ -4669,6 +4670,46 @@ function mpRemotesFrame(dt) {
     av.grp.rotation.y = av.yaw;
     if (p.name && p.name !== av.name) drawMpNameTag(av, p.name);   /* names arrive after players */
     av.sprite.visible = !!p.name;
+  }
+}
+
+/* M38: server player authority. Every tab ‒ including the mover's own tab ‒
+ * reconciles the local rig to the server's stamped (accepted) transform,
+ * exactly like mpRemotesFrame() does for remotes: first-sight snap, >30u
+ * jump snap (rollback), otherwise lerp k = 1-exp(-dt*15) with shortest-arc
+ * yaw. Local WASD/rowing keeps predicting between ticks; the 30 Hz stamp
+ * wins. There is no code path where the local transform is treated as
+ * authoritative over the server's. The underwater bit is NOT adopted (the
+ * local inWater()/heightAt computation stays). Inert without ?mp= / while
+ * disconnected / before the first own stamp (mpApi.self is null).
+ */
+let mpSelfSeen = false;   /* M38: first-sight flag (reset whenever the stamp disappears) */
+function mpSelfFrame(dt) {
+  if (!mpApi || !mpApi.connected() || !mpApi.self) {   /* SP / disconnected: local sim is truth */
+    mpSelfSeen = false;
+    return;
+  }
+  const p = mpApi.self;
+  if (!mpSelfSeen) {                              /* first sight: snap, never lerp from stale sim */
+    rig.position.set(p.x, p.y, p.z);
+    rig.rotation.y = p.yaw;
+    mpSelfSeen = true;
+    return;
+  }
+  const dx = p.x - rig.position.x, dy = p.y - rig.position.y, dz = p.z - rig.position.z;
+  if (dx * dx + dy * dy + dz * dz > 900) {        /* >30u divergence (rejected teleport / rollback): snap */
+    rig.position.set(p.x, p.y, p.z);
+    let d = p.yaw - rig.rotation.y;
+    d = Math.atan2(Math.sin(d), Math.cos(d));    /* shortest arc */
+    rig.rotation.y += d;
+  } else {
+    const k = 1 - Math.exp(-dt * 15);            /* exact M28 presence lerp */
+    rig.position.x += dx * k;
+    rig.position.y += dy * k;
+    rig.position.z += dz * k;
+    let d = p.yaw - rig.rotation.y;
+    d = Math.atan2(Math.sin(d), Math.cos(d));    /* shortest arc, no long-way spins */
+    rig.rotation.y += d * k;
   }
 }
 

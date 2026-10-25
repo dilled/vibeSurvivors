@@ -5223,6 +5223,213 @@ patched += `
     rig.position.set(saveRig.x, saveRig.y, saveRig.z);
   }
 }
+
+/* ---- M38: server player authority. The server is the single source of
+   truth for player transforms: every tab (the mover's OWN tab included)
+   reconciles its local rig to the server's stamped (accepted) transform via
+   mpSelfFrame - first-sight snap, >30u divergence snap (server-side
+   rollback), otherwise the M28 presence lerp k = 1-exp(-dt*15) with
+   shortest-arc yaw. Local WASD/rowing keeps predicting between ticks; the
+   30 Hz stamp wins. No code path treats the local transform as authoritative
+   over the server's. The M29/M30 gates (world lock, the authority-gated
+   type-29 upload) and the authorityPublicId wire field stay until M39/M40. */
+{
+  /* 1. single-player invariants: no mpApi -> no self-adoption */
+  if (mpApi !== null) throw new Error('M38: mpApi leaked in from the M37 block');
+  {
+    const x = rig.position.x, y = rig.position.y, z = rig.position.z, ry = rig.rotation.y;
+    mpSelfFrame(0.016);   /* must be a silent no-op (no mpApi) */
+    if (rig.position.x !== x || rig.position.y !== y || rig.position.z !== z || rig.rotation.y !== ry)
+      throw new Error('M38: mpSelfFrame touched the rig without ?mp=');
+  }
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  let __t38 = 4.1e8;   /* far past every earlier block's lastT (negative-dt guard) */
+  const pump = (n) => {
+    for (let i = 0; i < n; i++) {
+      const cb = globalThis.__rafCb; globalThis.__rafCb = null;
+      __t38 += 16.7; globalThis.__audioTime += 0.0167;
+      if (cb) cb(__t38);
+    }
+  };
+
+  const saveStarted = started, saveDead = dead, saveWon = won, saveOnRaft = onRaft;
+  const saveRig = { x: rig.position.x, y: rig.position.y, z: rig.position.z, ry: rig.rotation.y };
+  /* an earlier block may have left a string cooking on the fire; normalize
+     so updateFires (run by every pumped frame) can run, restore it in finally */
+  const saveFires = fires.slice();
+  const saveCooking = fires.map((f) => f.cooking);
+  for (const f of fires) if (typeof f.cooking === 'string') f.cooking = null;
+
+  /* tick builder: [27][u8 flags][u32 authority LE], then a bit0 players
+     section (u32 tickId, u32 count, count * 21B state) when players !== null */
+  const sendPlayersTick = (auth, tickId, players) => {
+    const parts = [];
+    const head = new Uint8Array(6);
+    head[0] = 27; head[1] = players ? 1 : 0;
+    new DataView(head.buffer).setUint32(2, auth, true);
+    parts.push(head);
+    if (players) {
+      const b = new Uint8Array(8 + players.length * 21);
+      const dv = new DataView(b.buffer);
+      dv.setUint32(0, tickId, true);
+      dv.setUint32(4, players.length, true);
+      let o = 8;
+      for (const p of players) {
+        dv.setUint32(o, p.id, true);
+        dv.setFloat32(o + 4, p.x, true);
+        dv.setFloat32(o + 8, p.y, true);
+        dv.setFloat32(o + 12, p.z, true);
+        dv.setFloat32(o + 16, p.yaw, true);
+        b[o + 20] = p.u ? 1 : 0;
+        o += 21;
+      }
+      parts.push(b);
+    }
+    const total = parts.reduce((s, q) => s + q.length, 0);
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const q of parts) { buf.set(q, off); off += q.length; }
+    wsInstances[0].onmessage({ data: buf.buffer.slice(0) });
+  };
+
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M38Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+    });
+    mpApi = api;
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M38: the join success was not parsed');
+    if (api.self !== null)
+      throw new Error('M38: self must be null before the first own tick entry');
+
+    /* freeze the local sim's rig writes: no WASD input (started false),
+       not aboard, ground handling off (won true) - so during this block the
+       rig is written ONLY by mpSelfFrame */
+    started = false; dead = false; won = true; onRaft = false;
+
+    /* 2. a tick bit0 carries the SERVER's stamped transform for THIS tab
+       (own publicId 110) and a second player 220: mpApi.self is populated
+       from the stamp; remotes still excludes self but keeps 220 */
+    const selfStamp = { id: 110, x: 50, y: 2, z: -30, yaw: 2.4 };
+    const other = { id: 220, x: 80, y: 0, z: 90, yaw: 0.7 };
+    sendPlayersTick(110, 7, [selfStamp, other]);
+    if (!api.self)
+      throw new Error('M38: mpApi.self was not populated from the own tick entry');
+    if (Math.abs(api.self.x - 50) > 1e-3 || Math.abs(api.self.y - 2) > 1e-3 ||
+        Math.abs(api.self.z + 30) > 1e-3 || Math.abs(api.self.yaw - 2.4) > 1e-3)
+      throw new Error('M38: the stamped self transform is wrong: ' + JSON.stringify(api.self));
+    if (api.remotes.has(110) || api.remotes.size !== 1 || !api.remotes.has(220))
+      throw new Error('M38: the self entry leaked into remotes or 220 was dropped');
+
+    /* 3. first sight: the rig SNAPS to the server stamp */
+    rig.position.set(5, 1, 5);
+    rig.rotation.y = 0.3;
+    pump(1);
+    if (Math.abs(rig.position.x - 50) > 1e-3 || Math.abs(rig.position.y - 2) > 1e-3 ||
+        Math.abs(rig.position.z + 30) > 1e-3 || Math.abs(rig.rotation.y - 2.4) > 1e-3)
+      throw new Error('M38: first sight did not snap the rig to the stamp: ' +
+        rig.position.x + ', ' + rig.position.y + ', ' + rig.position.z + ', ' + rig.rotation.y);
+
+    /* 4. divergence <=30u: the local prediction lerps back to the stamp
+       (k = 1-exp(-dt*15); 60 frames ~= 1s closes 1-exp(-15) of the gap) */
+    rig.position.set(52, 2, -28);
+    pump(60);
+    if (Math.abs(rig.position.x - 50) > 1e-3 || Math.abs(rig.position.y - 2) > 1e-3 ||
+        Math.abs(rig.position.z + 30) > 1e-3)
+      throw new Error('M38: the rig did not converge to the stamp: ' +
+        rig.position.x + ', ' + rig.position.y + ', ' + rig.position.z);
+
+    /* 5. divergence >30u (a rejected teleport rolled back server-side):
+       the rig SNAPS to the stamp - no client-authority fallback */
+    rig.position.set(100, 2, -30);
+    pump(1);
+    if (Math.abs(rig.position.x - 50) > 1e-3 || Math.abs(rig.position.y - 2) > 1e-3 ||
+        Math.abs(rig.position.z + 30) > 1e-3)
+      throw new Error('M38: the >30u divergence did not snap back to the stamp: ' +
+        rig.position.x + ', ' + rig.position.y + ', ' + rig.position.z);
+
+    /* 6. upload side untouched: the 30 Hz loop still sends type 26 (21B +
+       type byte) + type 32, and type 29 is still authority-gated (M30) -
+       this tab is authority, so all three go out; with the authority
+       elsewhere the type-29 upload stops (the gate stays until M40) */
+    intervals[0].fn();
+    {
+      const sent = wsInstances[0].sent.slice(-3)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
+      const s26 = sent.find((d) => d[0] === 26);
+      const s29 = sent.find((d) => d[0] === 29);
+      const s32 = sent.find((d) => d[0] === 32);
+      if (!s26 || s26.length !== 1 + 21)
+        throw new Error('M38: the 30 Hz type-26 state upload is gone or malformed');
+      if (!s32)
+        throw new Error('M38: the 30 Hz type-32 clock upload is gone');
+      if (!s29 || s29.length < 5)
+        throw new Error('M38: the authority type-29 animal upload is gone (M30 gate must stay)');
+    }
+    sendPlayersTick(200, 8, [selfStamp]);   /* the authority is now tab 200 */
+    if (api.isAuthority() !== false)
+      throw new Error('M38: authority tracking regressed');
+    intervals[0].fn();
+    {
+      const sent = wsInstances[0].sent.slice(-2)
+        .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)));
+      if (!sent.find((d) => d[0] === 26))
+        throw new Error('M38: non-authority tabs must still upload their type-26 state');
+      if (sent.find((d) => d[0] === 29))
+        throw new Error('M38: the type-29 upload is no longer authority-gated');
+    }
+
+    /* 7. disconnect: the server stamp is gone, local sim is authoritative
+       again */
+    api.close();
+    if (api.self !== null)
+      throw new Error('M38: the server stamp must clear on disconnect');
+    mpApi = null;
+    {
+      const x = rig.position.x, y = rig.position.y, z = rig.position.z, ry = rig.rotation.y;
+      mpSelfFrame(0.016);
+      if (rig.position.x !== x || rig.position.y !== y || rig.position.z !== z || rig.rotation.y !== ry)
+        throw new Error('M38: mpSelfFrame must be inert after disconnect');
+    }
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+    started = saveStarted; dead = saveDead; won = saveWon; onRaft = saveOnRaft;
+    rig.position.set(saveRig.x, saveRig.y, saveRig.z);
+    rig.rotation.y = saveRig.ry;
+    mpSelfSeen = false;
+    fires.length = 0; fires.push(...saveFires);
+    fires.forEach((f, i) => { f.cooking = saveCooking[i]; });
+    for (const av of mpAvatars.values()) scene.remove(av.grp);
+    mpAvatars.clear();
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);
