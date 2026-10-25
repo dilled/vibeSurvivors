@@ -5430,6 +5430,116 @@ patched += `
     mpAvatars.clear();
   }
 }
+
+/* ---- M39: the server applies + validates world edits against its world
+   store. Server side: see ServerBase (WorldStore gtests + the JS-reference
+   growth byte-identity ctest + smoke/e2e-edits.mjs against the live relay).
+   Client side: the type-34 MSG_VIVS_EDIT_REJECT wire message (a REJECTED
+   edit is never relayed - the sender alone gets [34][23B edit][u16 len LE]
+   [utf8 reason]) is parsed and surfaced through onEditReject, malformed
+   variants are dropped silently, and the type-28 uplink is untouched. */
+{
+  if (mpApi !== null) throw new Error('M39: mpApi leaked in from the M38 block');
+
+  const realSetInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const realSetTimeout = globalThis.setTimeout, realWebSocket = globalThis.WebSocket;
+  const intervals = [], timeouts = [], wsInstances = [];
+  class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; wsInstances.push(this); }
+    send(d) { this.sent.push(d); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  }
+  FakeWS.OPEN = 1;
+  globalThis.WebSocket = FakeWS;
+  globalThis.setInterval = (fn, ms) => { const h = { fn, ms, on: true }; intervals.push(h); return h; };
+  globalThis.clearInterval = h => { if (h) h.on = false; };
+  globalThis.setTimeout = (fn, ms) => { const h = { fn, ms, on: true }; timeouts.push(h); return h; };
+
+  /* build [34][23B VivsWorldEdit][u16 reasonLen LE][utf8 reason] */
+  const buildReject = (publicId, entityIndex, kind, payload0, reason) => {
+    const rb = new TextEncoder().encode(reason);
+    const b = new Uint8Array(1 + 23 + 2 + rb.length);
+    b[0] = 34;
+    const dv = new DataView(b.buffer);
+    dv.setUint32(1, publicId, true);
+    dv.setUint32(5, entityIndex, true);
+    b[9] = kind; b[10] = 0; b[11] = payload0;
+    dv.setUint16(1 + 23, rb.length, true);
+    b.set(rb, 1 + 23 + 2);
+    return b;
+  };
+
+  try {
+    const mp = await import(new URL('../lib/mp.js', import.meta.url).href);
+    const rejections = [];
+    const api = mp.attachMultiplayer({
+      rig, url: '127.0.0.1:3003', seed: 1337, displayName: 'M39Tester', inWater: () => false,
+      gameMin: () => gameMin,
+      animals: mpCollectAnimals,
+      onEditReject: (pid, eidx, kind, reason) => rejections.push({ pid, eidx, kind, reason }),
+    });
+    mpApi = api;
+    wsInstances[0].readyState = 1;
+    wsInstances[0].onopen();
+    const jsBuf = new Uint8Array(5);
+    new DataView(jsBuf.buffer).setUint32(1, 110, false);
+    jsBuf[0] = 8;
+    wsInstances[0].onmessage({ data: jsBuf.buffer.slice(0) });
+    if (api.publicId !== 110 || api.connected() !== true)
+      throw new Error('M39: the join success was not parsed');
+
+    /* 1. a valid type-34 (the server rejected a palm shake: the palm was
+       already dry) surfaces through onEditReject with the parsed fields */
+    wsInstances[0].onmessage({
+      data: buildReject(110, 7, 0, 5, 'palm 7 has 0 coconuts').buffer.slice(0),
+    });
+    if (rejections.length !== 1)
+      throw new Error('M39: the type-34 reject was not dispatched');
+    if (rejections[0].pid !== 110 || rejections[0].eidx !== 7 || rejections[0].kind !== 0)
+      throw new Error('M39: the reject fields are wrong: ' + JSON.stringify(rejections[0]));
+    if (rejections[0].reason !== 'palm 7 has 0 coconuts')
+      throw new Error('M39: the reject reason was not decoded: ' + rejections[0].reason);
+
+    /* 2. a camp-spot reject (utf8 reason, longer) decodes cleanly */
+    wsInstances[0].onmessage({
+      data: buildReject(110, 0, 2, 0, 'camp spot invalid: a palm stands in the way').buffer.slice(0),
+    });
+    if (rejections.length !== 2 || rejections[1].kind !== 2)
+      throw new Error('M39: the second reject was not dispatched');
+    if (rejections[1].reason !== 'camp spot invalid: a palm stands in the way')
+      throw new Error('M39: the second reason was not decoded: ' + rejections[1].reason);
+
+    /* 3. malformed variants are dropped silently: truncated edit, reason
+       length beyond the packet, empty packet */
+    const good = buildReject(110, 3, 3, 0, 'shelter already built');
+    const trunc = good.slice(0, 25).buffer.slice(0);          // mid-edit
+    const overLen = buildReject(110, 3, 3, 0, 'no').slice();  // len 2 -> pad u16 +2
+    overLen[1 + 23] += 2;
+    wsInstances[0].onmessage({ data: trunc });
+    wsInstances[0].onmessage({ data: overLen.buffer.slice(0) });
+    wsInstances[0].onmessage({ data: new Uint8Array([34, 0]).buffer.slice(0) });
+    if (rejections.length !== 2)
+      throw new Error('M39: a malformed type-34 reached the hook');
+
+    /* 4. the type-28 edit uplink is untouched (24B: type + 23B edit) */
+    const sentOk = api.sendEdit(0, 7, new Uint8Array(12));
+    if (!sentOk) throw new Error('M39: sendEdit stopped working');
+    const up = wsInstances[0].sent.slice(-1)
+      .map((d) => (d instanceof Uint8Array ? d : new Uint8Array(d)))
+      .find((d) => d[0] === 28);
+    if (!up || up.length !== 1 + 23 || new DataView(up.buffer, up.byteOffset).getUint32(5, true) !== 7)
+      throw new Error('M39: the type-28 edit upload is gone or malformed');
+
+    api.close();
+    mpApi = null;
+  } finally {
+    globalThis.WebSocket = realWebSocket;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    globalThis.setTimeout = realSetTimeout;
+    mpApi = null;
+  }
+}
 `;
 const file = join(here, '.game-smoke.mjs');
 writeFileSync(file, patched);

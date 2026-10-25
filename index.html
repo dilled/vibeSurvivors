@@ -4011,6 +4011,7 @@ function clearSave() {
   try { localStorage.removeItem(SAVE_KEY); } catch {}
 }
 function saveGame() {
+  if (MP_ON) return;   /* M39/M25: the shared island has no local persistence - the server store is canonical */
   if (dead || won) return;   /* never snapshot a terminal state */
   if (!storageOk()) return;
   const campS = camp ? {
@@ -4083,6 +4084,7 @@ function validateSave(s) {
   return true;
 }
 function loadGame(sv) {
+  if (MP_ON) return false;   /* M39/M25: never load a local save onto the shared island */
   sv = sv || readSave();
   if (!sv) return false;
   /* time + player */
@@ -5069,6 +5071,15 @@ function mpBuildWorld(w, force) {
       onEditSync: (pid, eidx, kind, action, payload) => {
         if (pid === mpApi.publicId) return;   /* already applied before the drop */
         mpApplyWorldEdit(kind, eidx, payload);
+      },
+      /* M39: the server rejected one of THIS tab's edits (it was never
+         relayed to anyone). The tab already applied it locally; because the
+         server store is a bit-exact port, a legitimate edit is always
+         accepted, so a reject means a genuinely invalid mutation - surface
+         it loudly (M39 scope: no local rollback / resync yet). */
+      onEditReject: (pid, eidx, kind, reason) => {
+        console.warn(`[MP] edit kind=${kind} entity=${eidx} rejected by server: ${reason}`);
+        toast('the island says no \u2014 ' + reason);
       },
       onTime: (gm) => {
         /* M37: EVERY tab adopts the server clock (bit4 is the server's own
