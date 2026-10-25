@@ -4436,6 +4436,52 @@ patched += `
   }
 }
 
+/* ---- M44: vegetation placement (local non-mp world, pre-M34-synthetic) ----
+   The floating-palm fix: each palm keeps g = scatter ground height separate
+   from h = trunk height; trunk bases are drawn at g - 0.2, crowns at g + h;
+   big trees sit on analytic ground with the top canopy blob straddling the
+   trunk top. Must run BEFORE the M34 block (which mutates + restores the
+   world arrays with a synthetic payload). */
+{
+  for (let i = 0; i < palms.length; i++) {
+    const p = palms[i];
+    if (p.g !== heightAt(p.x, p.z))
+      throw new Error('M44: palm ' + i + ' ground g is not heightAt: ' + JSON.stringify(p));
+    if (!(p.h >= 3.5 && p.h <= 5.7000001))
+      throw new Error('M44: palm ' + i + ' trunk h out of 3.5..5.7: ' + p.h);
+    if (Math.abs(p.top[1] - (p.g + p.h)) > 1e-9)
+      throw new Error('M44: palm ' + i + ' crown not at ground+trunkH: ' + JSON.stringify(p));
+  }
+  for (let i = 0; i < bigTrees.length; i++) {
+    const t = bigTrees[i];
+    if (t.h !== heightAt(t.x, t.z))
+      throw new Error('M44: big tree ' + i + ' ground h is not heightAt: ' + JSON.stringify(t));
+    /* top canopy blob: center top-0.6, y half-height 0.75*0.8*s = 0.6s; trunk top
+       at top-0.2 (base sunk 0.2). s >= 2.6, so the blob always straddles it. */
+    const s = t.cs !== undefined ? t.cs : 2.6, top = t.h + t.th, trunkTop = top - 0.2;
+    if (top - 0.6 - 0.6 * s >= trunkTop || top - 0.6 + 0.6 * s <= trunkTop)
+      throw new Error('M44: big tree ' + i + ' top canopy does not straddle trunk top');
+  }
+  /* trunk InstancedMesh (material 0x8a6f4d): every base sits at ground-0.2 */
+  const trunkMeshes = scene.children.filter(m => m.instanceMatrix && m.material && m.material.color
+    && Math.round(m.material.color.r * 255) === 0x8a
+    && Math.round(m.material.color.g * 255) === 0x6f
+    && Math.round(m.material.color.b * 255) === 0x4d);
+  if (trunkMeshes.length === 0) throw new Error('M44: palm trunk InstancedMesh not found in scene');
+  const tm = trunkMeshes[trunkMeshes.length - 1];
+  const mats = tm.instanceMatrix.mats;
+  if (Object.keys(mats).length !== palms.length)
+    throw new Error('M44: trunk instance count ' + Object.keys(mats).length + ' != palms ' + palms.length);
+  for (let i = 0; i < palms.length; i++) {
+    const p = palms[i], m = mats[i];
+    if (!m) throw new Error('M44: trunk ' + i + ' matrix not recorded');
+    if (m.x !== p.x || m.z !== p.z)
+      throw new Error('M44: trunk ' + i + ' xz off: ' + JSON.stringify(m) + ' ' + JSON.stringify(p));
+    if (Math.abs(m.y - (p.g - 0.2)) > 1e-9)
+      throw new Error('M44: trunk ' + i + ' base off ground: y=' + m.y + ' ground=' + p.g);
+  }
+}
+
 /* ---- M34: mp world built from the server placement block (type 33) ----
    The smoke page is non-mp (location.search = ''), so the immediate local
    builds ran at load; we then feed a MODIFIED synthetic payload to
@@ -4485,7 +4531,8 @@ patched += `
       + '/' + rocks.length + '/' + plants.length);
   {
     const p0 = palms[0];
-    if (p0.h !== 4.25) throw new Error('M34: palm h must be trunkH (M44 quirk): ' + p0.h);
+    if (p0.h !== 4.25) throw new Error('M34: palm h must be trunkH: ' + p0.h);
+    if (p0.g !== 3.5) throw new Error('M34: palm g must be groundH (M44): ' + p0.g);
     if (p0.top[0] !== 1.5 + 0.2 * 4.25 * 0.98 || p0.top[1] !== 3.5 + 4.25
         || p0.top[2] !== -2.25 - 0.15 * 4.25 * 0.98)
       throw new Error('M34: palm top not recomputed: ' + JSON.stringify(p0.top));

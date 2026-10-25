@@ -284,7 +284,7 @@ function scatter(n, hmin, hmax, minDist, maxAttempts = 4000) {
 const MP_ON = new URLSearchParams(location.search).has('mp');
 let mpWorldBuilt = false;
 
-const palms = [];   /* {x,z,h, tx,tz, top, cocos, idx} */
+const palms = [];   /* {x,z,g,h, tx,tz, top, cocos, idx} ‒ M44: g=ground, h=trunk height */
 let cocosMesh = null;   /* instanced crown coconuts; hidden per-palm as they drop */
 const bigTrees = []; /* {x,z,h} */
 const rocks = [];
@@ -293,10 +293,15 @@ const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(
 const V = new THREE.Vector3(), S = new THREE.Vector3();
 
 /* palms: beach + grass fringe */
+/* M44: g keeps the scatter ground (p.h); h is the trunk height. Previously the
+   spread h overwrote p.h and the trunk base was placed at y = trunk height
+   (floating up to ~4.3u / buried on high ground), leaving crowns misaligned.
+   Draw order (h, tx, tz) unchanged, so the rng stream is untouched. */
 for (const p of scatter(140, 0.5, 6, 6)) {
+  const g = p.h;
   const h = 3.5 + rng() * 2.2;
   const tx = (rng() - 0.5) * 0.5, tz = (rng() - 0.5) * 0.5;
-  palms.push({ ...p, h, tx, tz, top: [p.x + tx * h * 0.98, p.h + h, p.z + tz * h * 0.98],
+  palms.push({ ...p, g, h, tx, tz, top: [p.x + tx * h * 0.98, g + h, p.z + tz * h * 0.98],
                cocos: 2, idx: palms.length });
 }
 /* big trees with lianas: jungle */
@@ -353,7 +358,8 @@ function buildIslandMeshes() {
   const trunks = addInstanced(trunkGeo, trunkMat, palms.length);
   for (let i = 0; i < palms.length; i++) {
     const p = palms[i];
-    setM(i, trunks, p.x, p.h, p.z, p.tz, 0, -p.tx, 1, p.h, 1);
+    /* M44: base on the ground (g, 0.2u sink, big-tree convention), not trunk height */
+    setM(i, trunks, p.x, p.g - 0.2, p.z, p.tz, 0, -p.tx, 1, p.h, 1);
   }
   /* palm fronds: 7 per crown */
   const frondGeo = new THREE.ConeGeometry(0.5, 2.3, 4);
@@ -4996,16 +5002,17 @@ function mpAnimalsPresent(dt) {
  * to local gen today; consuming it is what future server world mutations
  * flow through. Rejoin re-sends the same block; the build-once guard
  * ignores duplicates (rebuilding would reset cocos/charges).
- * Entry shapes mirror the local spawn: palm h = trunkH (spread-overwrite
- * semantics, M44's floating-palm quirk replicated on purpose), rock sy =
- * the FINAL y-scale per WorldGen.hpp, big-tree cs/loff/llen = server draws.
+ * Entry shapes mirror the local spawn: palm h = trunkH and g = groundH
+ * (M44 fixed the floating-palm quirk on both the local and server paths),
+ * rock sy = the FINAL y-scale per WorldGen.hpp, big-tree
+ * cs/loff/llen = server draws.
  */
 function mpBuildWorld(w, force) {
   if (!w || (mpWorldBuilt && !force)) return;
   palms.length = 0;
   for (let i = 0; i < w.palms.length; i++) {
     const p = w.palms[i];
-    palms.push({ x: p.x, z: p.z, h: p.trunkH, tx: p.tx, tz: p.tz,
+    palms.push({ x: p.x, z: p.z, g: p.groundH, h: p.trunkH, tx: p.tx, tz: p.tz,
       top: [p.x + p.tx * p.trunkH * 0.98, p.groundH + p.trunkH,
             p.z + p.tz * p.trunkH * 0.98], cocos: 2, idx: i });
   }
