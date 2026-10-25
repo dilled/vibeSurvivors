@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-25T09:58:24.973Z._
+_Auto-generated. Last updated 2026-10-25T11:41:05.379Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -29,6 +29,7 @@ _Auto-generated. Last updated 2026-10-25T09:58:24.973Z._
 - [m32-cpp-determinism-port](pages/m32-cpp-determinism-port.md) — category: decision | tags: [cpp, server, determinism, v8, m32] | ## What landed
 - [m37-server-time-weather](pages/m37-server-time-weather.md) — category: decision | tags: [m37, multiplayer, server-authority, weather, clock] | What was decided: from M37 the server (ServerBase `VibeSurvivorsPlugin`) OWNS the
 - [m38-server-player-authority](pages/m38-server-player-authority.md) — category: decision | tags: [m38, multiplayer, server-authority, players] | What was decided: from M38 the server is the **single source of truth for player
+- [m39-server-edit-validation](pages/m39-server-edit-validation.md) — category: decision | tags: [m39, multiplayer, server-authority, edits, world-store] | What was decided: from M39 the server is the **single source of truth for world
 - [m4-sleep-system](pages/m4-sleep-system.md) — category: decision | tags: [camp, sleep, night] | ## What shipped (M4 — sleep + night survival loop)
 - [m5-tiger](pages/m5-tiger.md) — category: decision | tags: [tiger, night, predator, threat] | ## What shipped (M5 — first tiger)
 - [m6-night-1-encounter](pages/m6-night-1-encounter.md) — category: decision | tags: [tiger, gulls, crabs, night, encounter] | ## What shipped (M6 ‒ night-1 encounter)
