@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-25T14:31:44.198Z._
+_Auto-generated. Last updated 2026-10-25T14:57:46.943Z._
 
 - [animal-ecosystem-design](pages/animal-ecosystem-design.md) — category: concept | The game's identity is its animal ecosystem, not the survival checklist. **10 species**: fish, crabs, seagulls, pelicans, monkeys, spiders,
 - [m1-survival-systems](pages/m1-survival-systems.md) — category: decision | <current best understanding — replace this with the real content>
@@ -34,6 +34,7 @@ _Auto-generated. Last updated 2026-10-25T14:31:44.198Z._
 - [m40-zero-client-authority](pages/m40-zero-client-authority.md) — category: decision | M40 removed ALL client authority and made the server world survive a restart.
 - [m41-v3-integration-pass](pages/m41-v3-integration-pass.md) — category: decision | tags: [multiplayer, serverbase, verification, e2e] | ## What M41 established
 - [m42-mp-shared-world-visibility](pages/m42-mp-shared-world-visibility.md) — category: decision | tags: [m42, multiplayer, world-state, protocol, verification] | M42 (`8fbf7c3`, server half separately in ServerBase `720f7ee`) closes the first post-v3 follow-on from the M41 M42-M44 list ([[m41-v3-integ
+- [m43-remote-player-animation](pages/m43-remote-player-animation.md) — category: decision | tags: [m43, multiplayer, protocol, rendering, verification] | M43 (`c581d67`) makes MP remote players visibly animate instead of sliding boxes: remote avatars get a procedural walk cycle + one-shot atta
 - [m5-tiger](pages/m5-tiger.md) — category: decision | tags: [tiger, night, predator, threat] | ## What shipped (M5 — first tiger)
 - [m6-night-1-encounter](pages/m6-night-1-encounter.md) — category: decision | tags: [tiger, gulls, crabs, night, encounter] | ## What shipped (M6 ‒ night-1 encounter)
 - [m7-vegetation-framework](pages/m7-vegetation-framework.md) — category: decision | tags: [vegetation, plants, foraging, determinism, rng, framework] | ## What shipped (M7 ‒ vegetation framework)

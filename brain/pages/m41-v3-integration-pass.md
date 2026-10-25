@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [multiplayer, serverbase, verification, e2e]
 created: "2026-10-25T13:44:15"
-updated: "2026-10-25T13:44:53"
+updated: "2026-10-25T14:57:01"
 ---
 
 <!-- compiled_truth -->
@@ -51,7 +51,7 @@ Everything green in the final state: ServerBase ctest 178/178; `smoke/run.mjs` S
 
 ## Follow-ons (M42-M44)
 
-Remote players' placed/built objects + held items visible on other clients; remote-player procedural animation (action flag + walk cycle); vegetation placement ground-clamp/canopy-alignment fix. All build on the now-fully-landed v3 world (zero client authority, persisted world store).
+Remote players' placed/built objects + held items visible on other clients; remote-player procedural animation (action flag + walk cycle); vegetation placement ground-clamp/canopy-alignment fix. **M42** ([[m42-mp-shared-world-visibility]]) and **M43** ([[m43-remote-player-animation]]) are done; the remaining follow-on is **M44** (vegetation placement ground-clamp/canopy-alignment fix, keeping placement deterministic). All build on the now-fully-landed v3 world (zero client authority, persisted world store).
 
 
 ## Timeline
@@ -66,4 +66,10 @@ Remote players' placed/built objects + held items visible on other clients; remo
   kind: decision
   summary: "M41 final v3 integration status: e2e-play gate (3-tab play + mid-play reconnect, zero divergence) + e2e-perf measured payload numbers + e2e relay-ownership conventions"
   source: brain update-truth
+  affects: [m41-v3-integration-pass]
+
+- time: 2026-10-25T14:57:01
+  kind: decision
+  summary: "Follow-on list updated: M42 and M43 landed (M43 in c581d67); M44 remains the only open post-v3 follow-on"
+  source: "brain sync pass: commit c581d67 (range 533f356..c581d67)"
   affects: [m41-v3-integration-pass]
