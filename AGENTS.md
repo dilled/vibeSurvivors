@@ -46,7 +46,8 @@ A milestone is complete only when:
 3. Regressions found during implementation have been fixed.
 4. Durable decisions, requirements, constraints, and discoveries have been
    persisted to Brain when appropriate.
-5. `PLAN.md` progress has been updated.
+5. `PLAN.md` progress has been updated (milestone row marked ✅ with the session
+   stats block, per the global AGENTS.md rules).
 6. Graphify has been refreshed after meaningful structural changes.
 7. `git diff` and `git status` have been inspected.
 8. The completed milestone has been committed to Git.
