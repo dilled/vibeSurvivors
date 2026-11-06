@@ -113,6 +113,18 @@ patched += `
   const groundNow = Math.max(heightAt(rig.position.x, rig.position.z), WATER - 0.25);
   if (Math.abs(rig.position.y - groundNow) > 0.3) throw new Error('player not grounded: ' + rig.position.y.toFixed(2) + ' vs ' + groundNow.toFixed(2));
 
+  /* mobile: the node stub has no touch ‒ IS_TOUCH is inert, but the stick
+     feeds the very same movement path as WASD (screen-left = world -x at camYaw 0) */
+  if (IS_TOUCH) throw new Error('mobile: IS_TOUCH must be false under the node stub');
+  {
+    const mpos = { x: rig.position.x, z: rig.position.z, y: rig.position.y };
+    touchStick.x = -1;
+    pump(60);
+    touchStick.x = 0;
+    if (rig.position.x > mpos.x - 2) throw new Error('mobile: stick-left did not move the player');
+    rig.position.x = mpos.x; rig.position.z = mpos.z; rig.position.y = mpos.y;
+  }
+
   // day: strong sun, bright sky; night: sun off, dark sky
   setClockP(0.33); pump(3);
   if (sun.intensity < 0.8) throw new Error('daytime sun too dim: ' + sun.intensity);

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>vibeSurvivors — shipwreck on an unmapped island</title>
 <script type="importmap">
 { "imports": { "three": "./lib/three.module.js" } }
@@ -79,6 +80,60 @@
   }
   #won p { font-size: 15px; color: #9fc3dd; letter-spacing: 2px; margin: 4px; }
   #won b { color: #ffe9a0; }
+  /* ---- touch / mobile controls (coarse-pointer devices only) ---- */
+  canvas { touch-action: none; }
+  #touchui { position: fixed; inset: 0; z-index: 15; display: none; pointer-events: none; }
+  #stickbase {
+    position: absolute; left: 22px; bottom: 30px; width: 128px; height: 128px;
+    border: 2px solid rgba(160,210,250,.45); border-radius: 50%;
+    background: rgba(8,18,28,.35); pointer-events: auto;
+  }
+  #stickknob {
+    position: absolute; left: 50%; top: 50%; width: 56px; height: 56px;
+    margin: -28px 0 0 -28px; border-radius: 50%;
+    background: rgba(180,225,255,.55); border: 1px solid rgba(255,255,255,.6);
+  }
+  #actgrid {
+    position: absolute; right: 12px; bottom: 20px;
+    display: grid; grid-template-columns: repeat(3, 62px); gap: 8px;
+  }
+  #btnrun {
+    position: absolute; left: 56px; bottom: 172px; width: 54px; height: 54px;
+    border-radius: 50%;
+  }
+  .tbtn {
+    pointer-events: auto; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+    height: 46px; border-radius: 9px; user-select: none; -webkit-user-select: none;
+    background: rgba(8,18,28,.5); border: 1px solid rgba(150,200,245,.4);
+    color: #dceeff; font-family: ui-monospace, 'Cascadia Mono', monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px; text-align: center;
+  }
+  .tbtn.hit { background: rgba(120,200,255,.55); }
+  #btnrun.on { background: rgba(255,210,120,.6); border-color: rgba(255,230,160,.8); color: #2a2208; }
+  .tbig {
+    pointer-events: auto; box-sizing: border-box;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 130px; height: 46px; padding: 0 14px; border-radius: 9px;
+    background: rgba(8,18,28,.55); border: 1px solid rgba(150,200,245,.5);
+    color: #dceeff; font-family: ui-monospace, monospace;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px; user-select: none; -webkit-user-select: none;
+  }
+  body.touch #dead .tbig, body.touch #wonbtns { display: inline-flex; }
+  #dead .tbig, #wonbtns { display: none; }
+  #dead .tbig { margin-top: 18px; }
+  #wonbtns { justify-content: center; gap: 10px; }
+  body.touch #toasts { bottom: 240px; }
+  body.touch #hint { bottom: 240px; }   /* above the action grid */
+  body.touch #hud { font-size: 10.5px; }
+  body.touch #overlay h1 { font-size: 42px; letter-spacing: 6px; }   /* portrait title card */
+  #newisland {
+    display: none; margin-top: 14px; font-size: 12px; letter-spacing: 2px;
+    color: #ffe9a0; border: 1px solid rgba(255,210,120,.4); border-radius: 8px;
+    padding: 8px 16px; background: rgba(8,18,28,.4);
+    pointer-events: auto; user-select: none; -webkit-user-select: none;
+  }
+  body.touch #newisland.hasSave { display: block; }
 </style>
 </head>
 <body>
@@ -105,11 +160,30 @@
     <div class="row"><span>respawn</span><b>R</b></div>
   </div>
   <div class="play" id="playline">ANY KEY &mdash; WASH ASHORE</div>
+  <div id="newisland">NEW ISLAND</div>
 </div>
 <div id="hud"></div>
 <div id="hint">the island is unmapped &mdash; what you see is all there is</div>
 <div id="toasts"><div id="toast0"></div><div id="toast1"></div><div id="toast2"></div></div>
-<div id="dead"><h2>YOU DIED</h2><p><b>R</b> &mdash; wash ashore again (you lose what you were carrying)</p></div>
+<div id="touchui">
+  <div id="stickbase"><div id="stickknob"></div></div>
+  <div class="tbtn" id="btnrun">RUN</div>
+  <div id="actgrid">
+    <div class="tbtn" data-act="use">USE</div>
+    <div class="tbtn" data-act="eat">EAT</div>
+    <div class="tbtn" data-act="fire">FIRE</div>
+    <div class="tbtn" data-act="strike">STRIKE</div>
+    <div class="tbtn" data-act="craft">CRAFT</div>
+    <div class="tbtn" data-act="sleep">SLEEP</div>
+    <div class="tbtn" data-act="camp">CAMP</div>
+    <div class="tbtn" data-act="herb">HERB</div>
+    <div class="tbtn" data-act="rope">ROPE</div>
+    <div class="tbtn" data-act="raft">RAFT</div>
+    <div class="tbtn" data-act="map">MAP</div>
+    <div class="tbtn" data-act="log">LOG</div>
+  </div>
+</div>
+<div id="dead"><h2>YOU DIED</h2><p><b>R</b> &mdash; wash ashore again (you lose what you were carrying)</p><div class="tbig" id="btnrise">RISE &mdash; WASH ASHORE AGAIN</div></div>
 <div id="won"></div>
 
 <script src="lib/cfg.js"></script>
@@ -821,6 +895,169 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'F8') showPerf = !showPerf;   /* M24: section profiler HUD line */
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+/* ---------------- touch / mobile controls ----------------
+   Coarse-pointer devices (touch phones/tablets) get: a virtual stick
+   (bottom-left) that feeds the same camera-relative movement vector as
+   WASD, touch-drag anywhere else on the canvas to orbit the camera
+   (same camYaw/camPitch as the mouse drag), a RUN sprint toggle, and a
+   compact action grid firing the exact same one-shot actions as the
+   keyboard. Desktop (fine pointer) is untouched. */
+const IS_TOUCH = !!( (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window) || (typeof URLSearchParams !== 'undefined' && new URLSearchParams(location.search).has('touch')) );   /* ?touch=1 forces the layout (dev / desktop) */
+/* debug/test handle (mobile controls + CDP checks) */
+window.__vsv = {
+  started: () => started,
+  pos: () => [rig.position.x, rig.position.y, rig.position.z],
+  cam: () => [camYaw, camPitch],
+  stick: () => [touchStick.x, touchStick.y],
+};
+/* mobile hints: the context hint names keyboard keys ‒ translate them to
+   the button labels a touch player can actually press */
+const HINT_BTN = { E: 'USE', C: 'EAT', F: 'EAT', V: 'EAT', Q: 'EAT', M: 'HERB', G: 'FIRE', B: 'CRAFT',
+                   X: 'STRIKE', H: 'CAMP', J: 'CAMP', K: 'CAMP', L: 'CAMP', N: 'CAMP', U: 'ROPE',
+                   O: 'RAFT', Z: 'SLEEP', I: 'LOG', Y: 'MAP', R: 'RISE', WASD: 'the stick', Space: 'SPACE' };
+function hintTouch(s) {
+  return s.replace(/C\/F\/V\/Q/g, 'EAT').replace(/[A-Z]{1,5}\b/g, (k) => HINT_BTN[k] || k);
+}
+let touchSprint = false;
+const touchStick = { x: 0, y: 0 };   /* normalized -1..1, screen space (y down = -z forward like KeyW) */
+{
+  const tu = document.getElementById('touchui');
+  if (!IS_TOUCH || !tu) {   /* desktop + headless smoke: inert */
+  } else {
+    document.body.classList.add('touch');
+    tu.style.display = 'block';
+    const base = document.getElementById('stickbase');
+    const knob = document.getElementById('stickknob');
+    const STICK_R = 52;   /* px of travel for full deflection */
+    let stickId = null;
+    const touchBeginGame = () => {   /* first touch anywhere starts (like the first key) */
+      if (started || won) return;
+      started = true; audioInit();
+      overlay.style.opacity = '0'; setTimeout(() => overlay.style.display = 'none', 800);
+      if (bootSave) loadGame();
+    };
+    const setStick = (cx, cy) => {
+      let dx = cx - base._cx, dy = cy - base._cy;
+      const l = Math.hypot(dx, dy);
+      if (l > STICK_R) { dx = dx / l * STICK_R; dy = dy / l * STICK_R; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      touchStick.x = dx / STICK_R; touchStick.y = dy / STICK_R;
+    };
+    base.addEventListener('touchstart', (e) => {
+      const t = e.changedTouches[0];
+      touchBeginGame();
+      stickId = t.identifier;
+      const r = base.getBoundingClientRect();
+      base._cx = r.left + r.width / 2; base._cy = r.top + r.height / 2;
+      setStick(t.clientX, t.clientY);
+      e.preventDefault();
+    }, { passive: false });
+    window.addEventListener('touchmove', (e) => {
+      if (stickId === null) return;
+      for (const t of e.touches) {
+        if (t.identifier === stickId) { setStick(t.clientX, t.clientY); e.preventDefault(); break; }
+      }
+    }, { passive: false });
+    const endStick = (e) => {
+      for (const t of e.changedTouches) {
+        if (t.identifier === stickId) {
+          stickId = null; touchStick.x = 0; touchStick.y = 0;
+          knob.style.transform = 'translate(0px, 0px)';
+          e.preventDefault(); break;
+        }
+      }
+    };
+    window.addEventListener('touchend', endStick, { passive: false });
+    window.addEventListener('touchcancel', endStick, { passive: false });
+
+    /* touch-drag on the canvas (outside the joystick) orbits the camera,
+       mirroring the mouse-drag handler above */
+    let camId = null, camTX = 0, camTY = 0;
+    window.addEventListener('touchstart', (e) => {
+      for (const t of e.changedTouches) {
+        if (t.identifier === stickId || camId !== null) continue;
+        if (e.target === renderer.domElement) { camId = t.identifier; camTX = t.clientX; camTY = t.clientY; }
+      }
+    }, { passive: true });
+    window.addEventListener('touchmove', (e) => {
+      if (camId === null) return;
+      for (const t of e.touches) {
+        if (t.identifier !== camId) continue;
+        camYaw -= (t.clientX - camTX) * 0.0032;
+        camPitch = Math.max(CAM_PITCH_MIN, Math.min(CAM_PITCH_MAX, camPitch + (t.clientY - camTY) * 0.0032));
+        camTX = t.clientX; camTY = t.clientY;
+        e.preventDefault(); break;
+      }
+    }, { passive: false });
+    const endCam = (e) => { for (const t of e.changedTouches) if (t.identifier === camId) camId = null; };
+    window.addEventListener('touchend', endCam, { passive: true });
+    window.addEventListener('touchcancel', endCam, { passive: true });
+
+    /* action grid ‒ the same one-shot actions as the keyboard keys */
+    const TACT = {
+      use:    () => { actUse(); interactT = 0.45; },
+      eat:    () => { eatBest(); interactT = 0.45; },
+      fire:   () => { actFire(); },
+      strike: () => { actStrike(); },
+      craft:  () => { actCraftSpear(); },
+      sleep:  () => { actSleep(); },
+      camp:   () => { actCamp(); },
+      herb:   () => { useHerb(); interactT = 0.45; },
+      rope:   () => { actCraftRope(); },
+      raft:   () => { actBuildRaft(); },
+      map:    () => { toggleMap(); },
+      log:    () => { toggleJournal(); },
+    };
+    document.querySelectorAll('#touchui .tbtn[data-act]').forEach((b) => {
+      b.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const f = TACT[b.dataset.act];
+        if (f) f();
+        b.classList.add('hit'); setTimeout(() => b.classList.remove('hit'), 120);
+      }, { passive: false });
+    });
+    const runBtn = document.getElementById('btnrun');
+    runBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      touchSprint = !touchSprint;
+      runBtn.classList.toggle('on', touchSprint);
+    }, { passive: false });
+
+    /* overlays: a first touch washes ashore (like the first key); the dead /
+       won cards and the title's NEW ISLAND offer carry touch buttons */
+    window.addEventListener('touchstart', (e) => {
+      const el = e.target;
+      if (el.closest && (el.closest('#touchui') || el.closest('#dead') || el.closest('#won') || el.closest('#mpbox') || el.closest('input'))) return;
+      const id = el.id || '';
+      if (id === 'btnrise') { e.preventDefault(); if (dead) respawn(); return; }
+      if (id === 'btnendless') { e.preventDefault(); startEndless(); return; }
+      if (id === 'btnnewgame') { e.preventDefault(); location.reload(); return; }
+      if (id === 'newisland') {
+        e.preventDefault();
+        clearSave(); bootSave = null;
+        el.classList.remove('hasSave');
+        const pl = document.getElementById('playline');
+        if (pl) pl.innerHTML = 'TAP &mdash; WASH ASHORE';
+        return;
+      }
+      touchBeginGame();
+    }, { passive: false });
+    const playEl = document.getElementById('playline');
+    if (playEl) playEl.innerHTML = 'TAP &mdash; WASH ASHORE';
+    const card = overlay.querySelector('.card');   /* keyboard key list ‒ swap for the touch guide */
+    if (card) card.innerHTML =
+      '<div class="row"><span>move / sprint</span><b>left stick &middot; RUN</b></div>' +
+      '<div class="row"><span>camera</span><b>drag the screen</b></div>' +
+      '<div class="row"><span>use &mdash; drink / pick / shake / cook / catch</span><b>USE</b></div>' +
+      '<div class="row"><span>eat the best meal you carry</span><b>EAT</b></div>' +
+      '<div class="row"><span>fire / craft spear / spear</span><b>FIRE &middot; CRAFT &middot; STRIKE</b></div>' +
+      '<div class="row"><span>make camp &middot; build</span><b>CAMP</b></div>' +
+      '<div class="row"><span>sleep &middot; healing herb</span><b>SLEEP &middot; HERB</b></div>' +
+      '<div class="row"><span>twist rope &middot; build the raft</span><b>ROPE &middot; RAFT</b></div>' +
+      '<div class="row"><span>paper map &middot; field journal</span><b>MAP &middot; LOG</b></div>';
+  }
+}
 
 /* ---------------- survival: stats, inventory, journal ---------------- */
 
@@ -3431,7 +3668,8 @@ function winEscape() {
     '<h2>YOU LEFT THE ISLAND</h2>' +
     '<p>days ashore <b>' + dayOf() + '</b> &nbsp;&middot;&nbsp; discoveries <b>' + journal.length +
     '</b> &nbsp;&middot;&nbsp; animals seen <b>' + seen + '</b></p>' +
-    '<p><b>R</b> &mdash; wash ashore again &nbsp;&middot;&nbsp; <b>E</b> &mdash; stay on the island (endless)</p>';
+    '<p><b>R</b> &mdash; wash ashore again &nbsp;&middot;&nbsp; <b>E</b> &mdash; stay on the island (endless)</p>' +
+    '<p id="wonbtns"><span class="tbig" id="btnendless">STAY &mdash; ENDLESS</span><span class="tbig" id="btnnewgame">NEW GAME</span></p>';
   wonEl.style.display = 'flex';
 }
 
@@ -3549,6 +3787,15 @@ function vomit() {
 /* M8: eat foraged food. Cooked first, raw edibles next, poisons only when
    nothing else is left (starvation pressure). First eat of each species
    writes the permanent "you now know" journal entry (learned, not labeled). */
+/* mobile EAT button: one smart meal ‒ cooked fish, then cooked crab, then
+   coconut, then foraged food (Q order). The C/F/V/Q keys stay as-is. */
+function eatBest() {
+  if (dead) return;
+  if (INV.fishCooked > 0) { eatFish(); return; }
+  if (INV.crabCooked > 0) { eatCrab(); return; }
+  if (INV.coconut > 0) { eatCoconut(); return; }
+  eatGathered();
+}
 function eatGathered() {
   if (dead) return;
   const e = VEG_EAT_ORDER.find(([k]) => INV[k] > 0);
@@ -4216,6 +4463,11 @@ let bootSave = null;
   if (bootSave && playEl) {
     const day = Math.floor((bootSave.p0 * 1800 + bootSave.gameMin) / 1800) + 1;
     playEl.innerHTML = 'ANY KEY &mdash; CONTINUE &mdash; DAY ' + day + '   (&nbsp;N &mdash; NEW ISLAND&nbsp;)';
+    if (IS_TOUCH) {   /* mobile: the new-island offer is a button, not a key */
+      playEl.innerHTML = 'TAP &mdash; CONTINUE &mdash; DAY ' + day;
+      const ni = document.getElementById('newisland');
+      if (ni) ni.classList.add('hasSave');
+    }
   }
   if ((new URLSearchParams(location.search)).has('start') && bootSave) loadGame(bootSave);
 }
@@ -4489,9 +4741,12 @@ function frame(t) {
     if (keys['KeyS']) mz += 1;
     if (keys['KeyA']) mx -= 1;
     if (keys['KeyD']) mx += 1;
+    if (Math.hypot(touchStick.x, touchStick.y) > 0.2) {   /* mobile virtual stick */
+      mx += touchStick.x; mz += touchStick.y;
+    }
   }
   const moving = mx !== 0 || mz !== 0;
-  const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 8.5 : 5.5;
+  const speed = (keys['ShiftLeft'] || keys['ShiftRight'] || touchSprint) ? 8.5 : 5.5;
   {   /* rotate the camera-space input into world space (at camYaw 0 this is the identity) */
     const sy = Math.sin(camYaw), cy = Math.cos(camYaw);
     const wx = mx * cy + mz * sy, wz = mz * cy - mx * sy;
@@ -4499,7 +4754,7 @@ function frame(t) {
   }
   if (onRaft && camp.structures.raft) {   /* M21: aboard ‒ WASD rows the raft, the rig follows the deck */
     const rp = camp.structures.raft.position;
-    const rSpeed = keys['ShiftLeft'] || keys['ShiftRight'] ? 6.0 : 4.0;
+    const rSpeed = (keys['ShiftLeft'] || keys['ShiftRight'] || touchSprint) ? 6.0 : 4.0;
     if (moving) {
       const l = Math.hypot(mx, mz);
       rp.x += (mx / l) * rSpeed * dt;
@@ -4540,7 +4795,7 @@ function frame(t) {
   rig.armL.rotation.x = -sw * 0.6;
   rig.armR.rotation.x = sw * 0.6 + (spearSwing > 0 ? -Math.sin((0.35 - spearSwing) * 18) * 1.2 : 0);
   mpLocalMoving = started && !dead && moving;   /* M43: mirrors land walking + raft rowing */
-  mpLocalRun = mpLocalMoving && (keys['ShiftLeft'] || keys['ShiftRight']);
+  mpLocalRun = mpLocalMoving && (keys['ShiftLeft'] || keys['ShiftRight'] || touchSprint);
   mpSelfFrame(dt);      /* M38: server player authority ‒ reconcile own rig to the server stamp */
   mpRemotesFrame(dt);   /* M28: remote-player presence (null-guarded, inert single-player) */
 
@@ -4593,7 +4848,7 @@ function frame(t) {
   updateAlarms(dt);   /* M16: one decay per frame; early + late see the same set */
   updateAnimals(dt, 'early');   /* M12: fish + crabs, pre-frame dayFactor (before weather/sky) */
   pt('animE');   /* M24: items + fires + torches + alarms + early animals */
-  hintEl.textContent = contextHint();
+  hintEl.textContent = IS_TOUCH ? hintTouch(contextHint()) : contextHint();
 
   updateWeather(dt);
   updateSky(dt);
@@ -5112,6 +5367,7 @@ function mpBuildWorld(w, force) {
       } catch (e) { /* private mode: roll a random name in mp.js */ }
       return new Promise(resolve => {
         const box = document.createElement('div');
+        box.id = 'mpbox';   /* touch handlers skip the name prompt */
         box.style.cssText = 'position:fixed;inset:0;z-index:50;display:flex;align-items:center;'
           + 'justify-content:center;background:rgba(0,0,0,.65);font-family:monospace;';
         const panel = document.createElement('div');
